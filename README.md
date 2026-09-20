@@ -77,6 +77,8 @@ Atalhos globais: `Ctrl+Alt+E` liga/desliga o mouse • `Ctrl+Alt+B` mostra/ocult
 
 ## Modos de controle (painel principal)
 
+O painel principal **rola na vertical** (roda do mouse ou barra lateral) e pode ser esticado só para cima/baixo, então cabe em telas baixas; a largura é fixa.
+
 Dois menus no painel escolhem **o que move o mouse**. O modo é salvo e vale na próxima abertura.
 
 | Menu | Modo | O que faz |

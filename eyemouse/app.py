@@ -47,7 +47,7 @@ class App:
         self.root.title("EyeMouse")
         if ICON_PATH.exists():
             self.root.iconbitmap(default=str(ICON_PATH))
-        self.root.resizable(False, False)
+        self.root.resizable(False, True)          # the panel can be stretched vertically only (it scrolls)
         self.root.protocol("WM_DELETE_WINDOW", self.quit)
         self.calibration: CalibrationScreen | None = None
         self._image: ImageScreen | None = None
@@ -55,6 +55,7 @@ class App:
         self._settings: SettingsWindow | None = None
         self._error_shown = False
         self._build_panel()
+        self._fit_panel()
         self.bubble = Bubble(self.root, cfg, self.tracker)
 
         self._listeners = [
@@ -67,8 +68,19 @@ class App:
 
     # ------------------------------------------------------------------ panel
     def _build_panel(self) -> None:
-        f = ttk.Frame(self.root, padding=14)
-        f.pack()
+        # The panel is taller than many screens: its content sits in a canvas with a vertical scrollbar (mouse wheel too).
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        self._canvas = tk.Canvas(self.root, highlightthickness=0, borderwidth=0, yscrollincrement=30)
+        self._vbar = ttk.Scrollbar(self.root, orient="vertical", command=self._canvas.yview)
+        self._canvas.configure(yscrollcommand=self._vbar.set)
+        self._canvas.grid(row=0, column=0, sticky="nsew")
+        self._vbar.grid(row=0, column=1, sticky="ns")
+        f = ttk.Frame(self._canvas, padding=14)
+        self._content = f
+        self._content_id = self._canvas.create_window(0, 0, window=f, anchor="nw")
+        f.bind("<Configure>", self._on_content_resize)
+        self.root.bind_all("<MouseWheel>", self._on_wheel)
         ttk.Label(f, text="EyeMouse", font=("Segoe UI", 16, "bold")).grid(row=0, column=0, columnspan=2, sticky="w")
         self.status = {k: tk.StringVar() for k in ("cam", "calib", "mouse")}
         for i, k in enumerate(self.status, start=1):
@@ -149,6 +161,34 @@ class App:
                  "R recentralizar • Q sair.  Clique: pinça polegar+indicador (esq.) / polegar+médio (dir.); segure para arrastar.")
         ttk.Label(f, text=hints, foreground="#666", wraplength=380, justify="left").grid(row=row, column=0, columnspan=2, sticky="w", pady=(10, 0))
         self._refresh_buttons()
+
+    def _on_content_resize(self, event=None) -> None:
+        """Keep the scroll region equal to the content and the canvas exactly as wide as the content (no horizontal resize)."""
+        self._canvas.configure(scrollregion=(0, 0, self._content.winfo_reqwidth(), self._content.winfo_reqheight()),
+                               width=self._content.winfo_reqwidth())
+
+    def _fit_panel(self) -> None:
+        """Open at the content height, or at most the screen height (minus the taskbar and title bar), and start at the top."""
+        self.root.update_idletasks()
+        want = self._content.winfo_reqheight()
+        room = self.root.winfo_screenheight() - 110
+        width = self._content.winfo_reqwidth() + self._vbar.winfo_reqwidth()
+        self.root.minsize(width, 260)
+        self.root.geometry(f"{width}x{min(want, room)}+40+20")
+        self._canvas.yview_moveto(0)
+
+    def _on_wheel(self, event) -> None:
+        """Mouse wheel scrolls the panel (unless the pointer is over the ball-size box, where it would change the value)."""
+        try:
+            under = self.root.winfo_containing(event.x_root, event.y_root)
+        except (KeyError, tk.TclError):
+            return
+        if under is None or under.winfo_toplevel() is not self.root or under.winfo_class() in ("TSpinbox", "Menu"):
+            return
+        first, last = self._canvas.yview()
+        if first <= 0.0 and last >= 1.0:
+            return                                                   # everything fits: nothing to scroll
+        self._canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
 
     def _refresh_buttons(self) -> None:
         cfg = self.cfg
