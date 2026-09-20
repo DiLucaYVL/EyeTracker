@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+data/
+# build outputs (the installer is not versioned)
+build/
+dist/
+*.egg-info/
