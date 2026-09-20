@@ -1,4 +1,4 @@
-"""Pinch gesture: thumb+index = left button, thumb+middle = right button, thumb+ring = scroll mode (see control.py).
+"""Pinch gesture: thumb+index = left button, thumb+middle = right button. Four folded fingers = scroll mode (control.py).
 
 The ONLY criterion is that the two fingertip "balls" touch. Each fingertip (thumb 4, index 8, middle 12) is a disc of
 radius `Config.pinch_ball_size` (a fraction of the hand size) drawn on the camera view; two discs touch when the distance
@@ -12,13 +12,28 @@ import numpy as np
 from .config import Config
 from .landmarks import HandData
 
-WRIST, THUMB_TIP, INDEX_TIP, MIDDLE_TIP, RING_TIP, MIDDLE_MCP, INDEX_MCP, PINKY_MCP = 0, 4, 8, 12, 16, 9, 5, 17
+WRIST, THUMB_TIP, INDEX_TIP, MIDDLE_TIP, MIDDLE_MCP, INDEX_MCP, PINKY_MCP = 0, 4, 8, 12, 9, 5, 17
 FINGER_TIPS = {"index": 8, "middle": 12, "ring": 16, "pinky": 20}
 NOT_TOUCHING = 9.9
+FOLDED_ENTER, FOLDED_EXIT = 1.15, 1.4    # curl of the most extended of the four fingers: below = folded, above = open again
 
 
 def _d(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.linalg.norm(a - b))
+
+
+def finger_curls(hand: HandData) -> dict[str, float]:
+    """Wrist-to-fingertip distance (3D) in palm lengths for the four fingers (NOT the thumb): high = extended, low = folded."""
+    world = hand.world
+    palm = _d(world[WRIST], world[MIDDLE_MCP])
+    if palm < 1e-6:
+        return {k: 9.9 for k in FINGER_TIPS}
+    return {k: _d(world[WRIST], world[i]) / palm for k, i in FINGER_TIPS.items()}
+
+
+def fingers_folded(hand: HandData, limit: float = FOLDED_ENTER) -> bool:
+    """Are index, middle, ring and pinky all folded? The thumb is free (thumbs-up / "legal" sign, or a fist)."""
+    return max(finger_curls(hand).values()) < limit
 
 
 def hand_scale_px(hand: HandData, size: tuple[int, int]) -> float:
@@ -40,24 +55,6 @@ def pinch_metrics(hand: HandData, width: int = 640, height: int = 480) -> tuple[
     scale = hand_scale_px(hand, (width, height))
     p = hand.pts[:, :2].astype(np.float64) * np.array([width, height], dtype=np.float64)
     return _d(p[THUMB_TIP], p[INDEX_TIP]) / scale, _d(p[THUMB_TIP], p[MIDDLE_TIP]) / scale
-
-
-def touch_metrics(hand: HandData, width: int = 640, height: int = 480) -> tuple[float, float, float]:
-    """(thumb-index, thumb-middle, thumb-ring) fingertip distances in hand sizes (2D). A pair touches when <= 2 balls."""
-    scale = hand_scale_px(hand, (width, height))
-    p = hand.pts[:, :2].astype(np.float64) * np.array([width, height], dtype=np.float64)
-    return tuple(_d(p[THUMB_TIP], p[i]) / scale for i in (INDEX_TIP, MIDDLE_TIP, RING_TIP))  # type: ignore[return-value]
-
-
-def scroll_touch(hand: HandData, cfg: Config, size: tuple[int, int] = (640, 480), strict: bool = True) -> bool:
-    """Is the thumb ball touching the ring-finger ball (the scroll gesture)?
-
-    `strict` (used to START the gesture) also requires the ring finger to be the closest of the three fingers to the
-    thumb, so a thumb that is between the middle and the ring finger is a click, not a scroll.
-    """
-    mi, mm, mr = touch_metrics(hand, *size)
-    on = cfg.pinch_thresholds()[0]
-    return mr <= on and (not strict or mr < min(mi, mm))
 
 
 def derive_ball_size(open_value: float, contact_value: float) -> float | None:
@@ -122,12 +119,9 @@ class PinchDetector:
             if self.active and t - self._last_seen > self.LOST_HAND_S:
                 self._clear()
             return self.active
-        three = [touch_metrics(h, *size) for h in hands]
-        raw = [(mi, mm) for mi, mm, _ in three]
+        raw = [pinch_metrics(h, *size) for h in hands]
         self.ratios = min(raw, key=lambda r: min(r))
-        # a hand whose thumb is closest to the ring finger (scroll gesture) or that scrolls already cannot click
-        metrics = [(NOT_TOUCHING, NOT_TOUCHING) if (k < len(blocked) and blocked[k]) or mr < min(mi, mm) else (mi, mm)
-                   for k, (mi, mm, mr) in enumerate(three)]
+        metrics = [(NOT_TOUCHING, NOT_TOUCHING) if k < len(blocked) and blocked[k] else m for k, m in enumerate(raw)]
         on, off = cfg.pinch_thresholds()
 
         if self.active is None:

@@ -17,7 +17,7 @@ ROWS = [
     ("Segurar a pinça por (ms) para arrastar", "drag_hold_ms", 100, 1000, 10),
     ("Sensibilidade da cabeça (modos com cabeça)", "head_gain", 0.3, 3.0, 0.05),
     ("Sensibilidade da mão (mover o cursor)", "hand_gain", 0.3, 3.0, 0.05),
-    ("Sensibilidade da rolagem (polegar+anelar)", "scroll_gain", 0.3, 3.0, 0.05),
+    ("Sensibilidade da rolagem (dedos dobrados)", "scroll_gain", 0.3, 3.0, 0.05),
 ]
 
 
@@ -47,7 +47,7 @@ class SettingsWindow:
                         ).grid(row=r, column=0, columnspan=3, sticky="w", pady=(10, 0))
 
         self.scroll_var = tk.BooleanVar(value=cfg.hand_scroll)
-        ttk.Checkbutton(body, text="Rolar com polegar+anelar", variable=self.scroll_var,
+        ttk.Checkbutton(body, text="Rolar com os dedos dobrados (joinha)", variable=self.scroll_var,
                         command=lambda: setattr(cfg, "hand_scroll", self.scroll_var.get())
                         ).grid(row=r + 1, column=0, columnspan=3, sticky="w")
         self.natural_var = tk.BooleanVar(value=cfg.scroll_natural)

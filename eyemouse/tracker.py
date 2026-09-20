@@ -15,7 +15,7 @@ from .blink import BlinkDetector
 from .camera_props import CAMERA_DEFAULTS, CAMERA_PROPS
 from .config import CALIBRATION_PATH, Config
 from .control import HandRoles, head_offset_px, head_target_px, hand_target_px, pointing_hand
-from .hands import ball_radius_px, hand_scale_px
+from .hands import ball_radius_px, fingers_folded, hand_scale_px
 from .features import extract_features, eye_region_box, face_box
 from .filters import MedianFilter, OneEuroFilter
 from .gaze_model import GazeModel
@@ -87,7 +87,7 @@ class Tracker(threading.Thread):
         self.head_neutral: np.ndarray | None = None   # (yaw, pitch) that maps to the screen centre in the head modes
         self._src = "none"
         self._hold_offset: np.ndarray | None = None   # hand pointing: cursor minus hand target, kept while pinching
-        self._scroll = HandRoles(cfg)                  # per-hand scroll state (thumb+ring touch): both hands count
+        self._scroll = HandRoles(cfg)                  # per-hand scroll state (folded fingers): both hands count
         self.frame_sink = None                        # optional callable(t, raw_frame): diagnostics / clip recording
         self._hand_hist: deque[tuple[float, np.ndarray]] = deque(maxlen=60)
         self.last_hands: tuple[list, tuple[int, int]] = ([], (640, 480))
@@ -240,7 +240,7 @@ class Tracker(threading.Thread):
 
         self.last_hands = (hands, (w, h))       # raw landmarks of the latest frame (diagnostics)
 
-        # thumb ball touching the ring-finger ball = scroll mode (wheel events are sent below, once the mouse is ours)
+        # four folded fingers (thumb free) = scroll mode (wheel events are sent below, once the mouse is ours)
         if cfg.hand_scroll:
             wheel = self._scroll.update(t, hands, (w, h))
         else:
@@ -248,8 +248,9 @@ class Tracker(threading.Thread):
             wheel = (0, 0)
 
         # pinch: the ONLY criterion is that the two fingertip balls touch. The one arbitration between gestures: a hand
-        # whose thumb is on the ring finger (scroll mode) does not click.
-        blocked = [cfg.hand_scroll and self._scroll.scrolling(i) for i in range(len(hands))]
+        # whose four fingers are folded (scroll pose) does not START a click (the thumb resting on a folded finger would).
+        no_pinch_yet = self._pinch.active is None
+        blocked = [cfg.hand_scroll and (self._scroll.scrolling(i) or (no_pinch_yet and fingers_folded(h))) for i, h in enumerate(hands)]
         pinch = self._pinch.update(t, hands, (w, h), blocked) if cfg.hand_clicks else None
 
         states = tuple(
@@ -427,16 +428,12 @@ class Tracker(threading.Thread):
                 cv2.line(small, px(hand.pts[a]), px(hand.pts[b]), color, 2)
             # The fingertip balls have exactly the size of the click criterion: the click fires when two of them touch.
             radius = max(3, int(round(ball_radius_px(ball, hand_scale_px(hand, PREVIEW_SIZE)))))
-            tips = {i: px(hand.pts[i]) for i in (4, 8, 12, 16)}
-            touching = {i: float(np.hypot(tips[4][0] - tips[i][0], tips[4][1] - tips[i][1])) <= 2 * radius for i in (8, 12, 16)}
-            # thumb ball colour = the gesture it is part of: green = left click (index), orange = right click (middle),
-            # purple = scroll (ring)
-            gesture = next((i for i in (16, 8, 12) if touching[i]), None)
-            fills = {4: gesture is not None, 8: touching[8], 12: touching[12], 16: touching[16]}
-            edge = {4: (235, 235, 235), 8: (255, 200, 110), 12: (110, 200, 255), 16: (230, 150, 200)}
-            fill = {8: (80, 220, 80), 12: (60, 160, 255), 16: (200, 90, 230)}
-            fill[4] = fill.get(gesture, (255, 255, 255))
-            for i in (4, 8, 12, 16):
+            tips = {i: px(hand.pts[i]) for i in (4, 8, 12)}
+            touching = {i: float(np.hypot(tips[4][0] - tips[i][0], tips[4][1] - tips[i][1])) <= 2 * radius for i in (8, 12)}
+            fills = {4: touching[8] or touching[12], 8: touching[8], 12: touching[12]}
+            edge = {4: (235, 235, 235), 8: (255, 200, 110), 12: (110, 200, 255)}
+            fill = {4: (80, 220, 80) if touching[8] else (60, 160, 255), 8: (80, 220, 80), 12: (60, 160, 255)}
+            for i in (4, 8, 12):
                 if fills[i]:
                     cv2.circle(small, tips[i], radius, fill[i], -1)
                 cv2.circle(small, tips[i], radius, edge[i], 2)

@@ -85,26 +85,27 @@ Dois menus no painel escolhem **o que move o mouse**. O modo é salvo e vale na 
 | | Cabeça + olho | O olhar posiciona o cursor e virar a cabeça o desloca também (cabeça = movimento grosso, olho = ajuste fino). Precisa de calibração. |
 | | Cabeça | O cursor segue para onde o nariz aponta, relativo a uma pose neutra. Não precisa de calibração. |
 | | Desativado | Olho e cabeça **não movem** o mouse. Os gestos da mão continuam: com a mão em *Pinça* você usa o mouse físico e clica/rola com a mão; com *Ponta do indicador move o cursor*, o dedo também move. Não precisa de calibração. |
-| **Mão** | Pinça (clique) *(padrão)* | A mão só clica e rola: polegar+indicador = esquerdo, polegar+médio = direito, segurar = arrastar, polegar+anelar = rolagem. Vale **qualquer uma das duas mãos**. |
-| | Ponta do indicador move o cursor + pinça | Quem move o cursor é **só a ponta do dedo indicador** (a bola do indicador), não a mão inteira; basta a mão estar visível, sem pose obrigatória. A pinça clica **e a ponta continua movendo o cursor durante a pinça** (é assim que se arrasta; o cursor segue o movimento *relativo* a partir do clique, então o clique não vira arrasto sem querer). **Polegar+anelar** rola a página e para o cursor. As duas mãos valem: uma pode apontar enquanto a outra rola. Sem mão, vale o modo de cabeça. |
+| **Mão** | Pinça (clique) *(padrão)* | A mão só clica e rola: polegar+indicador = esquerdo, polegar+médio = direito, segurar = arrastar, quatro dedos dobrados (joinha) = rolagem. Vale **qualquer uma das duas mãos**. |
+| | Ponta do indicador move o cursor + pinça | Quem move o cursor é **só a ponta do dedo indicador** (a bola do indicador), não a mão inteira; basta a mão estar visível, sem pose obrigatória. A pinça clica **e a ponta continua movendo o cursor durante a pinça** (é assim que se arrasta; o cursor segue o movimento *relativo* a partir do clique, então o clique não vira arrasto sem querer). **Quatro dedos dobrados (joinha)** rolam a página e param o cursor. As duas mãos valem: uma pode apontar enquanto a outra rola. Sem mão, vale o modo de cabeça. |
 
 - **Recentralizar cabeça** (`Ctrl+Alt+R`): define a pose atual como o centro da tela nos modos com cabeça. Isso também acontece ao ligar o mouse e ao trocar de modo.
 - **Sensibilidade do movimento** (sliders 0,3–3,0): *Cabeça*, *Mão* e *Rolagem*. O modo Olho não tem sensibilidade: sua precisão vem da calibração.
 - Atalhos: `Ctrl+Alt+H` alterna o modo da cabeça, `Ctrl+Alt+M` o da mão.
 
-## Rolagem com polegar+anelar
+## Rolagem com os dedos dobrados (joinha)
 
-Encostar a **bola do polegar na bola do dedo anelar** liga o modo de rolagem; enquanto elas se tocam, mover a mão rola a página como dois dedos no
-touchpad: quanto mais rápido o movimento, mais intensa a rolagem (curva superlinear; a sensibilidade é o slider *Rolagem*). Vertical e horizontal,
-com bloqueio de eixo (só a direção dominante rola). Mão para baixo rola para baixo; *Inverter a direção da rolagem (natural)* troca isso.
-Separar os dedos encerra a rolagem. Durante a rolagem o cursor fica parado (no modo "Ponta do indicador move o cursor") e a bolha fica roxa.
-Pode ser desligada em *Rolar com polegar+anelar*. Uma mão em rolagem não clica; a outra mão continua livre. Se o polegar estiver entre o
-médio/indicador e o anelar, vale o dedo **mais próximo**. Vale qualquer uma das duas mãos.
+Com **indicador, médio, anelar e mindinho dobrados** (o polegar é livre: vale o "joinha"/sinal de legal e também o punho), mover a mão rola a página
+como dois dedos no touchpad: quanto mais rápido o movimento, mais intensa a rolagem (curva superlinear; a sensibilidade é o slider *Rolagem*).
+Vertical e horizontal, com bloqueio de eixo (só a direção dominante rola). Mão para baixo rola para baixo; *Inverter a direção da rolagem
+(natural)* troca isso. Abrir qualquer um dos quatro dedos encerra a rolagem. Durante a rolagem o cursor fica parado (no modo "Ponta do
+indicador move o cursor") e a bolha fica roxa. Pode ser desligada em *Rolar com os dedos dobrados (joinha)*.
+O gesto é reconhecido pela distância do pulso à ponta de cada um dos quatro dedos (em 3D, relativa à palma): o dedo mais esticado precisa estar dobrado
+(medido nos dados: 0% de falsos com a mão aberta ou em pinça). Vale qualquer uma das duas mãos, cada uma com seu estado: uma pode apontar enquanto a outra rola.
 
 ## Visão da câmera
 
 O botão **Ver câmera (visão computacional)** abre uma janela ao vivo com o que o programa enxerga: rosto (caixa e íris), **esqueleto da mão**, estado
-(*relaxada*, *PINÇA esquerda/direita*, *ROLAGEM* com a velocidade, **um estado por mão**), as **bolas** nas pontas dos dedos (polegar, indicador, médio, anelar; ficam preenchidas quando se tocam: verde = clique esquerdo, laranja = direito, roxo = rolagem), a distância das pontas e a origem do cursor.
+(*relaxada*, *PINÇA esquerda/direita*, *ROLAGEM* com a velocidade, **um estado por mão**), as **bolas** nas pontas dos dedos (polegar, indicador e médio; ficam preenchidas quando se tocam: verde = clique esquerdo, laranja = direito; o esqueleto fica roxo na rolagem), a distância das pontas e a origem do cursor.
 Use-a para ajustar a posição da mão: com a mão fora do quadro nada funciona (foi a causa de testes ruins). É a mesma janela usada nos testes ao vivo.
 
 ## Dicas para acertar mais
@@ -114,14 +115,14 @@ Use-a para ajustar a posição da mão: com a mão fora do quadro nada funciona 
 - Câmera na altura dos olhos, ~50 cm da tela. Se mudar de posição, refaça (ou refine) a calibração.
 - Precisão realista de webcam: erro típico de 2–5% da tela. Não substitui um rastreador infravermelho.
 - A câmera precisa **enxergar sua mão** para a pinça funcionar. **O único critério de pinça é: as bolas dos dois dedos se tocam.** Cada ponta
-  de dedo (polegar, indicador, médio, anelar) é uma bola desenhada na *Visão da câmera*, com raio = *Bola da pinça* (% do tamanho da mão, padrão 9,5%).
+  de dedo (polegar, indicador, médio) é uma bola desenhada na *Visão da câmera*, com raio = *Bola da pinça* (% do tamanho da mão, padrão 9,5%).
   Duas bolas se tocam quando a distância entre as pontas, medida **na imagem**, é no máximo dois raios. Tocando = pinça, não tocando = sem pinça:
   sem 3D, sem histerese, sem espera e sem "guarda de punho"; o clique é solto no primeiro quadro em que as bolas se separam.
 - **Tamanho da bola**: digite no painel principal (*Bola da pinça*, 3–30 % da mão) ou rode o assistente **`P`** na tela inicial da calibração
   (15 s: mede sua mão aberta e em pinça e escolhe a bola que encosta quando *os seus* dedos encostam). Bola maior = dispara com os dedos mais afastados;
   menor = exige encostar de verdade. "Bola da pinça: padrão" está em *Configurações…*.
-- Como a única regra é o toque das bolas, um punho fechado também pode aproximar o polegar do indicador. A única arbitragem: uma mão em **rolagem**
-  (polegar+anelar) não clica, e o dedo mais próximo do polegar decide entre clique e rolagem.
+- Como a única regra é o toque das bolas, um punho fechado também pode aproximar o polegar do indicador. A única arbitragem: uma mão com os
+  **quatro dedos dobrados** (pose de rolagem) não *inicia* clique; a pinça é a mão com os outros dedos livres.
 - Limite conhecido: se o polegar passar rapidamente por cima da ponta do indicador (sem tocar de verdade na profundidade), a câmera única não distingue
   isso de uma pinça muito rápida e pode gerar um clique breve.
 - Alterações na aba *Câmera* **persistem no driver**, afetam outros apps e são reaplicadas toda vez que o programa abre. Se a imagem

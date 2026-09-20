@@ -25,8 +25,8 @@ HEAD_HELP = {
     "off": "Desativado: olho e cabeça não movem o mouse (use o mouse físico ou o modo de mão); os gestos da mão continuam ativos.",
 }
 HAND_HELP = {
-    "pinch": "Mão: pinça polegar+indicador = clique esquerdo, polegar+médio = direito, polegar+anelar = rolagem (mova a mão).",
-    "hand": "Mão: a ponta do dedo indicador move o cursor (também durante a pinça, para arrastar); pinça = bolas do polegar e do indicador/médio se tocam; polegar+anelar rola (mova a mão). As duas mãos valem. Sem mão, vale o modo de cabeça.",
+    "pinch": "Mão: pinça polegar+indicador = clique esquerdo, polegar+médio = direito, 4 dedos dobrados (joinha) = rolagem (mova a mão).",
+    "hand": "Mão: a ponta do dedo indicador move o cursor (também durante a pinça, para arrastar); pinça = bolas do polegar e do indicador/médio se tocam; 4 dedos dobrados (joinha) rolam (mova a mão). As duas mãos valem. Sem mão, vale o modo de cabeça.",
 }
 SOURCE_NAMES = {"eye": "olho", "head_eye": "cabeça + olho", "head": "cabeça", "hand": "mão", "off": "gestos da mão (olho/cabeça desativados)", "none": "—"}
 
@@ -119,7 +119,7 @@ class App:
             val.grid(row=i, column=2)
         self.scroll_var = tk.BooleanVar(value=self.cfg.hand_scroll)
         self.natural_var = tk.BooleanVar(value=self.cfg.scroll_natural)
-        ttk.Checkbutton(sens, text="Rolar com polegar+anelar", variable=self.scroll_var,
+        ttk.Checkbutton(sens, text="Rolar com os dedos dobrados (joinha)", variable=self.scroll_var,
                         command=lambda: self._set_flag("hand_scroll", self.scroll_var.get())).grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
         ttk.Checkbutton(sens, text="Inverter a direção da rolagem (natural)", variable=self.natural_var,
                         command=lambda: self._set_flag("scroll_natural", self.natural_var.get())).grid(row=4, column=0, columnspan=3, sticky="w")

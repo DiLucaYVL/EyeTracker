@@ -17,7 +17,7 @@ from eyemouse.filters import MedianFilter, OneEuroFilter
 from eyemouse import imaging
 from eyemouse.features import eye_region_box
 from eyemouse.gaze_model import GazeModel, reject_outliers
-from eyemouse.hands import PinchDetector, derive_ball_size, pinch_metrics, scroll_touch, touch_metrics
+from eyemouse.hands import FINGER_TIPS, PinchDetector, derive_ball_size, finger_curls, fingers_folded, pinch_metrics
 from eyemouse.landmarks import HandData
 
 SCREEN = (1366, 768)
@@ -190,10 +190,10 @@ class FilterTest(unittest.TestCase):
 IMG = (100, 100)
 
 
-def hand_touching(index_r, middle_r, ring_r=0.9, at=(0.5, 0.4), palm=(0.5, 0.6)):
+def hand_touching(index_r, middle_r, at=(0.5, 0.4), palm=(0.5, 0.6)):
     """A hand as MediaPipe reports it (image landmarks only: the pinch criterion is 2D).
 
-    The thumb tip is at `at`; the index / middle / ring tips are that many HAND SIZES away from it (the hand size is
+    The thumb tip is at `at`; the index / middle tips are that many HAND SIZES away from it (the hand size is
     0.2 of the image here). `palm` shifts the whole hand vertically (to place two hands in one frame).
     """
     dx, dy = at[0] - 0.5, palm[1] - 0.6
@@ -203,7 +203,6 @@ def hand_touching(index_r, middle_r, ring_r=0.9, at=(0.5, 0.4), palm=(0.5, 0.6))
     pts[4, :2] = (0.5, 0.4)
     pts[8, :2] = (0.5 + 0.2 * index_r, 0.4)
     pts[12, :2] = (0.5, 0.4 - 0.2 * middle_r)
-    pts[16, :2] = (0.5 - 0.2 * ring_r, 0.4)
     pts[:, 0] += dx
     pts[:, 1] += dy
     return HandData(pts, np.zeros((21, 3)))                       # no depth at all: the world coordinates must not matter
@@ -217,7 +216,6 @@ class PinchTest(unittest.TestCase):
         mi, mm = pinch_metrics(hand_touching(0.1, 0.8), *IMG)
         self.assertAlmostEqual(mi, 0.1, places=2)
         self.assertAlmostEqual(mm, 0.8, places=2)
-        self.assertAlmostEqual(touch_metrics(hand_touching(0.1, 0.8, 0.5), *IMG)[2], 0.5, places=2)
 
     def test_the_only_criterion_is_that_the_two_balls_touch(self):
         cfg = Config()
@@ -261,11 +259,6 @@ class PinchTest(unittest.TestCase):
         self.assertEqual(out[4], "left")                  # one frame apart is not enough to release
         self.assertIsNone(out[-1])
 
-    def test_a_thumb_closest_to_the_ring_finger_does_not_click(self):
-        # thumb between index (0.15) and ring (0.10): the ring finger is the closest, that is the scroll gesture
-        self.assertEqual(self.run_seq(PinchDetector(Config()), [(0.15, 0.9, 0.10)] * 4), [None] * 4)
-        self.assertEqual(self.run_seq(PinchDetector(Config()), [(0.10, 0.9, 0.15)] * 4)[-1], "left")
-
 
 class TwoHandsTest(unittest.TestCase):
     """Both hands count, not only the right one."""
@@ -298,23 +291,46 @@ class TwoHandsTest(unittest.TestCase):
 
     def test_the_other_hand_can_still_click_while_one_scrolls(self):
         det = PinchDetector(Config())
-        scrolling, pinch = hand_touching(0.9, 0.9, 0.1, at=(0.25, 0.4)), hand_touching(0.1, 0.9, at=(0.75, 0.4))
+        scrolling, pinch = hand_touching(0.1, 0.9, at=(0.25, 0.4)), hand_touching(0.1, 0.9, at=(0.75, 0.4))
         self.assertEqual(det.update(0.0, [scrolling, pinch], IMG, blocked=[True, False]), "left")
         self.assertEqual(det.hand_index, 1)
 
 
-class ScrollGestureTest(unittest.TestCase):
-    def test_thumb_and_ring_balls_touching_is_the_scroll_gesture(self):
-        cfg = Config()
-        on = cfg.pinch_thresholds()[0]
-        self.assertTrue(scroll_touch(hand_touching(0.9, 0.9, on - 0.01), cfg, IMG))
-        self.assertFalse(scroll_touch(hand_touching(0.9, 0.9, on + 0.01), cfg, IMG))
+def hand_pose(curls=(1.9, 1.9, 1.9, 1.9)):
+    """World landmarks of a hand (palm = 0.1 m) whose index/middle/ring/pinky are `curls` palm lengths from the wrist."""
+    w = np.zeros((21, 3))
+    w[9] = (0, 0.1, 0)
+    dirs = [(-0.3, 1.0), (0.0, 1.0), (0.3, 1.0), (0.6, 1.0)]
+    for (name, i), c, d in zip(FINGER_TIPS.items(), curls, dirs):
+        w[i, :2] = np.array(d) / np.linalg.norm(d) * 0.1 * c
+    w[4] = (0.12, 0.05, 0)                                            # the thumb: wherever, it is not part of the test
+    pts = np.zeros((21, 3))
+    pts[:, :2] = 0.5 + w[:, :2] * 2.0
+    return HandData(pts, w)
 
-    def test_starting_needs_the_ring_finger_to_be_the_closest_but_continuing_does_not(self):
-        cfg = Config()
-        hand = hand_touching(0.12, 0.9, 0.15)                    # ring touches too, but the index is closer
-        self.assertFalse(scroll_touch(hand, cfg, IMG, strict=True))
-        self.assertTrue(scroll_touch(hand, cfg, IMG, strict=False))
+
+class ScrollGestureTest(unittest.TestCase):
+    """Scroll pose = index, middle, ring and pinky folded; the thumb is free (thumbs-up / "legal" sign or a fist)."""
+
+    def test_curls_reflect_finger_extension_and_ignore_the_thumb(self):
+        open_hand, folded = finger_curls(hand_pose()), finger_curls(hand_pose((0.8,) * 4))
+        self.assertEqual(set(open_hand), {"index", "middle", "ring", "pinky"})
+        self.assertGreater(min(open_hand.values()), 1.8)
+        self.assertLess(max(folded.values()), 0.9)
+
+    def test_four_folded_fingers_are_the_pose_with_the_thumb_anywhere(self):
+        hand = hand_pose((0.8,) * 4)
+        self.assertTrue(fingers_folded(hand))
+        hand.world[4] = (0.02, 0.25, 0.0)                                # thumb up, far from the fingers: a thumbs-up
+        self.assertTrue(fingers_folded(hand))
+
+    def test_one_finger_that_stays_extended_is_not_the_pose(self):
+        for i in range(4):
+            curls = [0.8] * 4
+            curls[i] = 1.9
+            self.assertFalse(fingers_folded(hand_pose(curls)), FINGER_TIPS)
+        self.assertFalse(fingers_folded(hand_pose()))                    # open hand
+        self.assertFalse(fingers_folded(hand_pose((1.3,) * 4)))         # relaxed, half-folded
 
 
 class DeriveBallSizeTest(unittest.TestCase):
