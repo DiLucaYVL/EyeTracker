@@ -91,6 +91,17 @@ def focus_window(win) -> None:
             u32.AttachThreadInput(me, fg_thread, False)
 
 
+_WHEEL, _HWHEEL = 0x0800, 0x1000
+
+
+def wheel(vertical: int = 0, horizontal: int = 0) -> None:
+    """Scroll by wheel units (120 = one notch). vertical > 0 scrolls up, horizontal > 0 scrolls right."""
+    for flag, delta in ((_WHEEL, vertical), (_HWHEEL, horizontal)):
+        if delta:
+            inp = _Input(type=0, u=_InputUnion(mi=_MouseInput(0, 0, delta & 0xFFFFFFFF, flag, 0, 0)))
+            user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(_Input))
+
+
 def start_click_listener(on_click: Callable[[int, int], None]):
     """Listen to *physical* left clicks (clicks injected by this program are ignored)."""
     from pynput import mouse as pmouse

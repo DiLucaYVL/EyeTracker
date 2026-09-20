@@ -14,6 +14,7 @@ from . import imaging, mouse
 from .blink import BlinkDetector
 from .camera_props import CAMERA_DEFAULTS, CAMERA_PROPS
 from .config import CALIBRATION_PATH, Config
+from .control import ScrollController, head_offset_px, head_target_px, hand_target_px, pointing_hand
 from .features import extract_features, eye_region_box, face_box
 from .filters import MedianFilter, OneEuroFilter
 from .gaze_model import GazeModel
@@ -46,6 +47,9 @@ class FrameState:
     eye_preview: bytes | None = None  # zoomed eye strip, PPM (only in the image-adjust screen)
     eye_stats: tuple[float, float, float] | None = None  # (mean, p5-p95 spread, clipped fraction)
     head_vis: tuple[float, float] | None = None  # (dx, dy) nose offset in the mirrored view, for on-screen guidance
+    source: str = "none"              # what drives the cursor now: eye | head_eye | head | hand | none
+    scrolling: bool = False           # closed hand = scroll mode
+    scroll_speed: float = 0.0         # fist speed in frame heights per second
 
 
 class Tracker(threading.Thread):
@@ -78,12 +82,28 @@ class Tracker(threading.Thread):
         self._shown_pinch: str | None = None
         self._refit_timer: threading.Timer | None = None
         self._preview_n = 0
+        self.head_neutral: np.ndarray | None = None   # (yaw, pitch) that maps to the screen centre in the head modes
+        self._src = "none"
+        self._hold_offset: np.ndarray | None = None   # hand pointing: cursor minus hand target, kept while pinching
+        self._scroll = ScrollController(cfg)
+        self.frame_sink = None                        # optional callable(t, raw_frame): diagnostics / clip recording
+        self._hand_hist: deque[tuple[float, np.ndarray]] = deque(maxlen=60)
         self.last_hands: tuple[list, tuple[int, int]] = ([], (640, 480))
 
     # ---------------------------------------------------------------- public
+    def mode_ready(self) -> bool:
+        """Can the selected modes drive the cursor? The eye modes need a calibration; head/hand pointing do not."""
+        cfg = self.cfg
+        return self.model.ready or cfg.head_mode == "head" or cfg.hand_mode == "hand"
+
     @property
     def mouse_active(self) -> bool:
-        return self.mouse_enabled and not self.control_suspended and self.model.ready
+        return self.mouse_enabled and not self.control_suspended and self.mode_ready()
+
+    def recenter_head(self) -> None:
+        """Take the current head pose as the neutral one (screen centre) for the head modes."""
+        feats = self.recent_features(0.4)
+        self.head_neutral = np.median(np.stack(feats), axis=0)[5:7].copy() if feats else None   # None: next frame
 
     def latest(self) -> FrameState | None:
         return self._state
@@ -136,7 +156,7 @@ class Tracker(threading.Thread):
         landmarker = None
         try:
             cap = self._open_camera()
-            landmarker = FaceHandTracker(want_hands=self.cfg.hand_clicks)
+            landmarker = FaceHandTracker(want_hands=self.cfg.hand_clicks, hand_confidence=self.cfg.hand_confidence)
         except Exception as exc:  # noqa: BLE001 - reported to the UI
             self.error = f"{type(exc).__name__}: {exc}"
             self.started.set()
@@ -145,7 +165,8 @@ class Tracker(threading.Thread):
             return
         self.started.set()
 
-        last_ts, last_t, fps, frame_n = 0, time.perf_counter(), 0.0, 0
+        last_ts, fps, frame_n = 0, 0.0, 0
+        stamps: deque[float] = deque(maxlen=20)     # frame times: fps = frames / elapsed over the window
         try:
             while not self._stop_evt.is_set():
                 frame_n += 1
@@ -161,8 +182,9 @@ class Tracker(threading.Thread):
                 t = time.perf_counter()
                 ts = max(int(t * 1000), last_ts + 1)
                 last_ts = ts
-                fps = 0.9 * fps + 0.1 / max(t - last_t, 1e-3) if fps else 1.0 / max(t - last_t, 1e-3)
-                last_t = t
+                stamps.append(t)
+                if len(stamps) > 1 and stamps[-1] > stamps[0]:
+                    fps = (len(stamps) - 1) / (stamps[-1] - stamps[0])
                 if self._open_dialog:  # native DirectShow property page (blocks this thread until closed)
                     self._open_dialog = False
                     cap.set(cv2.CAP_PROP_SETTINGS, 1)
@@ -214,34 +236,92 @@ class Tracker(threading.Thread):
         if face_ok and not closed:
             self._feat_hist.append((t, feat))
 
-        # gaze
-        gaze = None
-        if face_ok and self.model.ready and not closed:
-            raw = self.model.predict_px(feat)
-            gaze = self._smooth(self._median(raw), t)
-        elif not face_ok or not self.model.ready:
-            self._median.reset()
-            self._smooth.reset()
-        elif self._state is not None:
-            gaze = self._state.gaze  # eyes closed: hold last point
-        holding = self._blink.settling(t)
-
-        # pinch clicks
         pinch = self._pinch.update(t, hands, (w, h)) if cfg.hand_clicks else None
         self.last_hands = (hands, (w, h))       # raw landmarks of the latest frame (diagnostics)
+
+        # closed hand = scroll mode (wheel events are sent below, once we know the mouse is under our control)
+        if cfg.hand_scroll:
+            wheel = self._scroll.update(t, pointing_hand(hands) if hands else None, (w, h))
+        else:
+            self._scroll.reset()
+            wheel = (0, 0)
+
+        # cursor target: eye / head+eye / head / hand
+        target, source, hold = self._select_target(feat, closed, hands, (w, h))
+        if source != self._src:                      # different signal: forget the old filter state
+            self._median.reset()
+            self._smooth.reset()
+            self._src = source
+        eyes = source in ("eye", "head_eye")
+        self._smooth.min_cutoff = cfg.smoothing_min_cutoff * (1.0 if eyes else 2.0)   # head/hand: less lag
+        if target is not None:
+            gaze = self._smooth(self._median(target), t)
+            if source == "hand":
+                self._hand_hist.append((t, gaze.copy()))
+        elif hold and self._state is not None:
+            gaze = self._state.gaze                  # eyes closed: hold the last point
+        else:
+            gaze = None
+            self._median.reset()
+            self._smooth.reset()
+        holding = self._blink.settling(t) if eyes else False
+
         self._drive_mouse(t, gaze, holding, pinch)
+        if (wheel[0] or wheel[1]) and self.mouse_active and pinch is None:
+            mouse.wheel(*wheel)
 
         preview = eye_preview = eye_stats = None
         if self.want_preview:
             image_mode = self.preview_mode == "image"
-            preview = self._make_preview(raw if self.show_original else frame, face, hands, pinch)
+            preview = self._make_preview(raw if self.show_original else frame, face, hands, pinch,
+                                         self._scroll.active and cfg.hand_scroll)
             if image_mode and face is not None:
                 eye_preview, eye_stats = self._make_eye_views(frame, raw, face)
         self._state = FrameState(
             t=t, face_ok=face_ok, feat=feat, blink_score=score, eyes_closed=closed, gaze=gaze, face_box=box,
             brightness=float(frame[::8, ::8].mean()), fps=fps, hand_ok=bool(hands), pinch=pinch,
             ratios=self._pinch.ratios, preview=preview, eye_preview=eye_preview, eye_stats=eye_stats,
-            head_vis=head_vis)
+            head_vis=head_vis, source=source, scrolling=self._scroll.active and cfg.hand_scroll,
+            scroll_speed=self._scroll.speed)
+        if self.frame_sink is not None:
+            self.frame_sink(t, raw)
+
+    # ---------------------------------------------------------------- targets
+    def _select_target(self, feat, closed: bool, hands, size) -> tuple[np.ndarray | None, str, bool]:
+        """(target px or None, source name, hold) for the current frame according to the head/hand modes."""
+        cfg = self.cfg
+        screen = self.model.screen
+        if cfg.hand_mode == "hand" and hands:
+            if self._scroll.active and cfg.hand_scroll:
+                return None, "hand", True            # closed hand scrolls: the cursor stays where it is (a pinch does not freeze it)
+            return hand_target_px(pointing_hand(hands), screen, cfg.hand_gain), "hand", False
+        if feat is None:
+            return None, "none", False
+        mode = cfg.head_mode
+        if mode == "head":
+            return head_target_px(feat, self._neutral(feat), screen, cfg.head_gain), "head", False
+        if not self.model.ready:
+            return None, mode, False
+        if closed:
+            return None, mode, True                  # eyes closed: the gaze estimate is invalid, hold
+        target = self.model.predict_px(feat)
+        if mode == "head_eye":
+            offset = head_offset_px(feat[5], feat[6], self._neutral(feat), screen, cfg.head_gain)
+            target = np.clip(target + offset, [0, 0], [screen[0] - 1, screen[1] - 1])
+        return target, mode, False
+
+    def _neutral(self, feat: np.ndarray) -> np.ndarray:
+        if self.head_neutral is None:
+            self.head_neutral = np.asarray(feat[5:7], dtype=np.float64).copy()
+        return self.head_neutral
+
+    def _press_anchor(self, t: float) -> np.ndarray | None:
+        """Hand pointing: the fingertip drifts while the fingers close for the pinch, so click where the hand was
+        just before the pinch started (0.2-0.55 s earlier)."""
+        if self._src != "hand":
+            return None
+        pts = [p for ts, p in self._hand_hist if t - 0.55 <= ts <= t - 0.2]
+        return np.median(np.stack(pts), axis=0) if len(pts) >= 2 else None
 
     # ----------------------------------------------------------------- mouse
     def _drive_mouse(self, t: float, gaze, holding: bool, pinch: str | None) -> None:
@@ -256,21 +336,38 @@ class Tracker(threading.Thread):
 
         # button state follows the pinch
         if pinch and self._pressed is None:
+            anchor = self._press_anchor(t)
+            if anchor is not None:
+                self._cursor = anchor
             if self._cursor is not None:
                 mouse.move_to(*self._cursor)
             mouse.button_down(pinch)
             self._pressed, self._press_t = pinch, t
+            # Hand pointing: keep following the hand *relatively* from here on. The box around the fingers changes
+            # while they close, so following the absolute position would drag the cursor away from the click point.
+            if self._src == "hand" and gaze is not None and self._cursor is not None:
+                self._hold_offset = self._cursor - np.asarray(gaze, dtype=np.float64)
             self.events.put(("pinch", pinch, *(self._cursor if self._cursor is not None else (None, None)), True))
         elif not pinch and self._pressed is not None:
             self._release_button()
             self.events.put(("pinch", None, None, None, True))
 
-        # cursor follows the gaze, except: eyes closing, or the first instants of a click (precision lock)
-        locked = self._pressed is not None and (t - self._press_t) * 1000 < self.cfg.drag_hold_ms
+        # cursor follows the target, except: eyes closing, or (eye/head sources) the first instants of a click
+        # (precision lock: the eyes wander right after the click). The hand keeps moving the cursor while pinching.
+        locked = self._pressed is not None and (t - self._press_t) * 1000 < self.cfg.drag_hold_ms and self._src != "hand"
         if gaze is None or holding or locked:
             return
-        if self._cursor is None or np.linalg.norm(gaze - self._cursor) > self.cfg.deadzone_px or self._pressed:
-            self._cursor = np.asarray(gaze, dtype=np.float64).copy()
+        pos = np.asarray(gaze, dtype=np.float64)
+        if self._hold_offset is not None:
+            if self._pressed is None:                # pinch released: let the offset fade out instead of snapping
+                self._hold_offset = self._hold_offset * 0.85
+                if np.linalg.norm(self._hold_offset) < 1.0:
+                    self._hold_offset = None
+            if self._hold_offset is not None:
+                pos = pos + self._hold_offset
+        deadzone = self.cfg.deadzone_px * (1.0 if self._src in ("eye", "head_eye") else 0.5)
+        if self._cursor is None or np.linalg.norm(pos - self._cursor) > deadzone or self._pressed:
+            self._cursor = pos.copy()
             mouse.move_to(*self._cursor)
 
     def _release_button(self) -> None:
@@ -291,7 +388,7 @@ class Tracker(threading.Thread):
         self.model.save(CALIBRATION_PATH)
 
     # --------------------------------------------------------------- preview
-    def _make_preview(self, frame, face, hands, pinch) -> bytes | None:
+    def _make_preview(self, frame, face, hands, pinch, scrolling: bool = False) -> bytes | None:
         self._preview_n += 1
         if self._preview_n % 2:  # ~15 fps is plenty for the setup screen
             return self._state.preview if self._state else None
@@ -308,6 +405,8 @@ class Tracker(threading.Thread):
             x1, y1 = px((face.pts[:, 0].min(), face.pts[:, 1].max()))
             cv2.rectangle(small, (x0, y0), (x1, y1), (255, 180, 60), 1)
         color = {"left": (80, 220, 80), "right": (60, 160, 255)}.get(pinch, (255, 255, 255))
+        if scrolling:
+            color = (247, 129, 163)          # purple (BGR): closed hand = scroll mode
         for hand in hands:
             for a, b in HAND_LINKS:
                 cv2.line(small, px(hand.pts[a]), px(hand.pts[b]), color, 2)

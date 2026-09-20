@@ -96,6 +96,54 @@ class CursorLogicTest(unittest.TestCase):
         self.mouse.button_down.assert_not_called()
 
 
+class HandDragTest(unittest.TestCase):
+    """Hand pointing: the pinch does not freeze the cursor; it follows the hand relatively from the click point."""
+
+    def setUp(self):
+        self.tracker = Tracker(Config(), ready_model(), queue.SimpleQueue())
+        self.tracker.mouse_enabled = True
+        self.tracker.cfg.hand_mode = "hand"
+        self.tracker._src = "hand"
+        patcher = mock.patch("eyemouse.tracker.mouse")
+        self.mouse = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def drive(self, t, gaze, pinch=None):
+        self.tracker._drive_mouse(t, np.array(gaze, dtype=float), False, pinch)
+
+    def test_the_click_lands_at_the_cursor_and_movement_during_the_pinch_drags_immediately(self):
+        self.drive(0.0, (100, 100))
+        self.mouse.move_to.reset_mock()
+        self.drive(1.0, (130, 100), pinch="left")               # the hand box drifted 30 px while the fingers closed
+        self.mouse.button_down.assert_called_once_with("left")
+        self.mouse.move_to.assert_called_with(100.0, 100.0)     # the click is at the cursor, not at the drifted hand position
+        self.mouse.move_to.reset_mock()
+        self.drive(1.05, (230, 100), pinch="left")              # the hand really moves 100 px: no precision lock, drag now
+        self.mouse.move_to.assert_called_with(200.0, 100.0)     # 100 + (230 - 130)
+
+    def test_after_the_release_the_offset_fades_out_smoothly(self):
+        self.drive(0.0, (100, 100))
+        self.drive(1.0, (130, 100), pinch="left")
+        self.drive(1.5, (130, 100), pinch=None)
+        self.mouse.button_up.assert_called_once_with("left")
+        xs = []
+        for i in range(40):
+            self.mouse.move_to.reset_mock()
+            self.drive(1.6 + i * 0.05, (130, 100))
+            if self.mouse.move_to.called:
+                xs.append(self.mouse.move_to.call_args[0][0])
+        self.assertTrue(all(b >= a for a, b in zip(xs, xs[1:])))          # monotonic approach, no snap
+        self.assertAlmostEqual(self.tracker._cursor[0], 130.0, delta=self.tracker.cfg.deadzone_px)
+
+    def test_eye_sources_keep_the_precision_lock_after_a_click(self):
+        self.tracker._src = "eye"
+        self.drive(0.0, (100, 100))
+        self.drive(1.0, (100, 100), pinch="left")
+        self.mouse.move_to.reset_mock()
+        self.drive(1.1, (400, 400), pinch="left")               # eyes wander during the lock
+        self.mouse.move_to.assert_not_called()
+
+
 class LearnFromClickTest(unittest.TestCase):
     def test_physical_click_adds_a_sample_only_when_near_the_prediction(self):
         tracker = Tracker(Config(), ready_model(), queue.SimpleQueue())

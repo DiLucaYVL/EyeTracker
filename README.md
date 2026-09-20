@@ -73,7 +73,37 @@ Comandos úteis:
 4. Com o mouse desligado, cada clique físico seu (quando a bolha estava perto) também ensina o modelo
    (*Aprender com cliques do mouse*).
 
-Atalhos globais: `Ctrl+Alt+E` liga/desliga o mouse • `Ctrl+Alt+B` mostra/oculta a bolha • `Ctrl+Alt+C` calibrar • `Ctrl+Alt+Q` sair.
+Atalhos globais: `Ctrl+Alt+E` liga/desliga o mouse • `Ctrl+Alt+B` mostra/oculta a bolha • `Ctrl+Alt+C` calibrar • `Ctrl+Alt+H` modo da cabeça • `Ctrl+Alt+M` modo da mão • `Ctrl+Alt+R` recentralizar a cabeça • `Ctrl+Alt+Q` sair.
+
+## Modos de controle (painel principal)
+
+Dois menus no painel escolhem **o que move o mouse**. O modo é salvo e vale na próxima abertura.
+
+| Menu | Modo | O que faz |
+|---|---|---|
+| **Cabeça** | Olho *(padrão)* | O cursor segue o olhar. A pose da cabeça continua entrando no modelo para **compensar** o erro, mas mexer a cabeça **não move** o mouse. Precisa de calibração. |
+| | Cabeça + olho | O olhar posiciona o cursor e virar a cabeça o desloca também (cabeça = movimento grosso, olho = ajuste fino). Precisa de calibração. |
+| | Cabeça | O cursor segue para onde o nariz aponta, relativo a uma pose neutra. Não precisa de calibração. |
+| **Mão** | Pinça (clique) *(padrão)* | A mão só clica: polegar+indicador = esquerdo, polegar+médio = direito, segurar = arrastar. |
+| | Mão relaxada move o cursor + pinça | Basta a **mão estar visível**: ela move o cursor sem exigir nenhuma pose (não precisa apontar o dedo). A pinça clica **e a mão continua movendo o cursor durante a pinça** (é assim que se arrasta; o cursor segue o movimento *relativo* da mão a partir do clique, então o clique não vira arrasto sem querer). O **punho fechado** rola a página e para o cursor. Sem mão, vale o modo de cabeça. |
+
+- **Recentralizar cabeça** (`Ctrl+Alt+R`): define a pose atual como o centro da tela nos modos com cabeça. Isso também acontece ao ligar o mouse e ao trocar de modo.
+- **Sensibilidade do movimento** (sliders 0,3–3,0): *Cabeça*, *Mão* e *Rolagem*. O modo Olho não tem sensibilidade: sua precisão vem da calibração.
+- Atalhos: `Ctrl+Alt+H` alterna o modo da cabeça, `Ctrl+Alt+M` o da mão.
+
+## Rolagem com a mão fechada
+
+Com a **mão fechada** (punho), mover a mão rola a página como dois dedos no touchpad: quanto mais rápido o movimento, mais intensa a rolagem
+(curva superlinear; a sensibilidade é o slider *Rolagem*). Vertical e horizontal, com bloqueio de eixo (só a direção dominante rola).
+Mão para baixo rola para baixo; *Inverter a direção da rolagem (natural)* troca isso. Durante a rolagem o cursor fica parado (no modo "Mão move o cursor")
+e a bolha fica roxa. Pode ser desligada em *Rolar com a mão fechada*. O punho é reconhecido quando os quatro dedos estão dobrados
+(medido nos dados: 0% de falsos com a mão aberta ou em pinça).
+
+## Visão da câmera
+
+O botão **Ver câmera (visão computacional)** abre uma janela ao vivo com o que o programa enxerga: rosto (caixa e íris), **esqueleto da mão**, estado
+(*mão aberta*, *PINÇA esquerdo/direito*, *PUNHO — rolagem* com a velocidade), a distância das pontas dos dedos e a origem do cursor.
+Use-a para ajustar a posição da mão: com a mão fora do quadro nada funciona (foi a causa de testes ruins). É a mesma janela usada nos testes ao vivo.
 
 ## Dicas para acertar mais
 
@@ -117,7 +147,7 @@ pinça ─► SendInput (botão esquerdo/direito, segurar = arrastar)
 - O olho fechado congela o cursor (a estimativa do olhar é inválida enquanto pisca).
 
 Arquivos: `eyemouse/` (`tracker.py` laço principal, `gaze_model.py`, `features.py`, `hands.py`, `calibration_ui.py`,
-`image_ui.py`, `head3d.py`, `imaging.py`, `bubble.py`, `app.py`), `tests/`, `tools/render_head_guide.py` (gera a imagem acima).
+`image_ui.py`, `head3d.py`, `imaging.py`, `control.py` (modos e rolagem), `preview_ui.py` (visão da câmera), `bubble.py`, `app.py`), `tests/`, `tools/render_head_guide.py` (gera a imagem acima).
 
 ## Testes
 

@@ -44,7 +44,7 @@ class HandData:
 class FaceHandTracker:
     """Runs FaceLandmarker and HandLandmarker on the same frame."""
 
-    def __init__(self, want_hands: bool = True):
+    def __init__(self, want_hands: bool = True, hand_confidence: float = 0.5):
         import mediapipe as mp
         from mediapipe.tasks import python as mp_python
         from mediapipe.tasks.python import vision
@@ -66,9 +66,9 @@ class FaceHandTracker:
                 base_options=mp_python.BaseOptions(model_asset_path=str(HAND_MODEL_PATH)),
                 running_mode=vision.RunningMode.VIDEO,
                 num_hands=2,
-                min_hand_detection_confidence=0.5,
-                min_hand_presence_confidence=0.5,
-                min_tracking_confidence=0.5,
+                min_hand_detection_confidence=hand_confidence,
+                min_hand_presence_confidence=hand_confidence,
+                min_tracking_confidence=hand_confidence,
             ))
 
     def process(self, frame_bgr: np.ndarray, ts_ms: int) -> tuple[FaceData | None, list[HandData]]:

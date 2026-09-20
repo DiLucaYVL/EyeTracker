@@ -42,6 +42,9 @@ FACE_MODEL_PATH = find_model("face_landmarker.task", DATA_DIR, RESOURCE_DIR)
 HAND_MODEL_PATH = find_model("hand_landmarker.task", DATA_DIR, RESOURCE_DIR)
 
 
+HEAD_MODES = {"eye": "Olho", "head_eye": "Cabeça + olho", "head": "Cabeça"}
+HAND_MODES = {"pinch": "Pinça (clique)", "hand": "Mão relaxada move o cursor + pinça"}
+
 # Bump when a *default* changes in a way old saved files must not override. Only the keys listed for a version are reset
 # when loading a file written before it (everything the user chose deliberately is kept).
 CONFIG_VERSION = 2
@@ -65,6 +68,14 @@ class Config:
     img_gamma: float = 1.0
     img_clahe: float = 0.0
     img_sharpen: float = 0.0
+    # control modes (see eyemouse/control.py)
+    head_mode: str = "eye"            # "eye" | "head_eye" | "head"
+    hand_mode: str = "pinch"          # "pinch" | "hand"
+    head_gain: float = 1.0            # head pointing sensitivity
+    hand_gain: float = 1.0            # hand pointing sensitivity
+    hand_scroll: bool = True          # a closed hand scrolls (two-finger touchpad style)
+    scroll_gain: float = 1.0          # scroll sensitivity (speed -> intensity)
+    scroll_natural: bool = False      # False: hand down scrolls down (Windows default); True: inverted
     # cursor
     start_with_mouse: bool = False
     smoothing_min_cutoff: float = 0.6
@@ -78,6 +89,7 @@ class Config:
     blink_open_thr: float = 0.35
     # hand pinch clicks (ratio = thumb-to-fingertip distance / palm length)
     hand_clicks: bool = True
+    hand_confidence: float = 0.5      # MediaPipe hand detection/tracking confidence (0.2-0.5 made no difference when the hand is in view)
     pinch_on_ratio: float = 0.25
     pinch_off_ratio: float = 0.50
     pinch_on_index: float = 0.0       # per-finger overrides written by the pinch calibration (0 = use the global values)
@@ -111,6 +123,10 @@ class Config:
         for key, value in data.items():
             if key in known and key not in stale:
                 setattr(cfg, key, type(getattr(cfg, key))(value))
+        if cfg.head_mode not in HEAD_MODES:
+            cfg.head_mode = "eye"
+        if cfg.hand_mode not in HAND_MODES:
+            cfg.hand_mode = "pinch"
         cfg.config_version = CONFIG_VERSION
         return cfg
 

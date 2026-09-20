@@ -10,7 +10,7 @@ import numpy as np
 from .config import Config
 
 KEY = "#010203"  # colour made transparent
-COLORS = {"normal": "#2f81f7", "closed": "#8b949e", "lost": "#484f58", "left": "#3fb950", "right": "#f0883e"}
+COLORS = {"normal": "#2f81f7", "closed": "#8b949e", "lost": "#484f58", "left": "#3fb950", "right": "#f0883e", "scroll": "#a371f7"}
 
 _user32 = ctypes.windll.user32
 _user32.GetParent.argtypes = [wintypes.HWND]
@@ -85,6 +85,8 @@ class Bubble:
             return
         if not st.face_ok:
             color = COLORS["lost"]
+        elif st.scrolling:
+            color = COLORS["scroll"]
         elif st.pinch in COLORS:
             color = COLORS[st.pinch]
         elif st.eyes_closed:

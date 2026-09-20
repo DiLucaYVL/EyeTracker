@@ -8,13 +8,26 @@ from tkinter import messagebox, ttk
 from . import mouse
 from .bubble import Bubble
 from .calibration_ui import CalibrationScreen
-from .config import CALIBRATION_PATH, ICON_PATH, Config
+from .config import CALIBRATION_PATH, HAND_MODES, HEAD_MODES, ICON_PATH, Config
 from .gaze_model import GazeModel
 from .image_ui import ImageScreen
+from .preview_ui import CameraView
 from .settings_ui import SettingsWindow
 from .tracker import Tracker
 
-HOTKEYS = {"<ctrl>+<alt>+e": "mouse", "<ctrl>+<alt>+b": "bubble", "<ctrl>+<alt>+c": "calibrate", "<ctrl>+<alt>+q": "quit"}
+HOTKEYS = {"<ctrl>+<alt>+e": "mouse", "<ctrl>+<alt>+b": "bubble", "<ctrl>+<alt>+c": "calibrate", "<ctrl>+<alt>+q": "quit",
+           "<ctrl>+<alt>+h": "head_mode", "<ctrl>+<alt>+m": "hand_mode", "<ctrl>+<alt>+r": "recenter"}
+
+HEAD_HELP = {
+    "eye": "Olho: o cursor segue o olhar. Mexer a cabeça NÃO move o mouse (a cabeça só ajuda a compensar o erro).",
+    "head_eye": "Cabeça + olho: o olhar posiciona o cursor e virar a cabeça o desloca também.",
+    "head": "Cabeça: o cursor segue para onde o nariz aponta (Recentralizar define o centro).",
+}
+HAND_HELP = {
+    "pinch": "Mão: pinça polegar+indicador = clique esquerdo, polegar+médio = direito. Mão fechada rola a página.",
+    "hand": "Mão: enquanto visível, a mão move o cursor (inclusive durante a pinça, para arrastar); a pinça clica e a mão fechada rola e para o cursor. Sem mão, vale o modo de cabeça.",
+}
+SOURCE_NAMES = {"eye": "olho", "head_eye": "cabeça + olho", "head": "cabeça", "hand": "mão", "none": "—"}
 
 
 class App:
@@ -26,7 +39,7 @@ class App:
         self.events: queue.SimpleQueue = queue.SimpleQueue()
         self.actions: queue.SimpleQueue = queue.SimpleQueue()
         self.tracker = Tracker(cfg, self.model, self.events)
-        self.tracker.mouse_enabled = cfg.start_with_mouse and self.model.ready
+        self.tracker.mouse_enabled = cfg.start_with_mouse and self.tracker.mode_ready()
         self.tracker.start()
 
         self.root = tk.Tk()
@@ -37,6 +50,7 @@ class App:
         self.root.protocol("WM_DELETE_WINDOW", self.quit)
         self.calibration: CalibrationScreen | None = None
         self._image: ImageScreen | None = None
+        self._view: CameraView | None = None
         self._settings: SettingsWindow | None = None
         self._error_shown = False
         self._build_panel()
@@ -47,7 +61,7 @@ class App:
             mouse.start_click_listener(self.tracker.on_physical_click),
         ]
         self.root.after(50, self._tick)
-        if calibrate_on_start or not self.model.ready:
+        if calibrate_on_start or (not self.model.ready and cfg.head_mode != "head" and cfg.hand_mode != "hand"):
             self.root.after(800, self.open_calibration)
 
     # ------------------------------------------------------------------ panel
@@ -57,35 +71,102 @@ class App:
         ttk.Label(f, text="EyeMouse", font=("Segoe UI", 16, "bold")).grid(row=0, column=0, columnspan=2, sticky="w")
         self.status = {k: tk.StringVar() for k in ("cam", "calib", "mouse")}
         for i, k in enumerate(self.status, start=1):
-            ttk.Label(f, textvariable=self.status[k]).grid(row=i, column=0, columnspan=2, sticky="w")
+            ttk.Label(f, textvariable=self.status[k], wraplength=380, justify="left").grid(row=i, column=0, columnspan=2, sticky="w")
 
+        row = 4
         self.btn_calib = ttk.Button(f, text="Calibrar (tela cheia)", command=self.open_calibration)
         self.btn_image = ttk.Button(f, text="Imagem e contraste dos olhos (tela cheia)", command=self.open_image)
+        self.btn_view = ttk.Button(f, text="Ver câmera (visão computacional)", command=self.toggle_view)
         self.btn_mouse = ttk.Button(f, text="", command=self.toggle_mouse)
+        for b in (self.btn_calib, self.btn_image, self.btn_view, self.btn_mouse):
+            b.grid(row=row, column=0, columnspan=2, sticky="ew", pady=3)
+            row += 1
+
+        # ---- control modes: one menu for the head, one for the hand
+        modes = ttk.LabelFrame(f, text="Modos de controle", padding=8)
+        modes.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(8, 3))
+        row += 1
+        self.head_var, self.hand_var = tk.StringVar(value=self.cfg.head_mode), tk.StringVar(value=self.cfg.hand_mode)
+        self.mb_head = ttk.Menubutton(modes, direction="below")
+        self.mb_hand = ttk.Menubutton(modes, direction="below")
+        for mb, var, names, cmd in ((self.mb_head, self.head_var, HEAD_MODES, self._on_head_mode),
+                                    (self.mb_hand, self.hand_var, HAND_MODES, self._on_hand_mode)):
+            menu = tk.Menu(mb, tearoff=0)
+            for key, name in names.items():
+                menu.add_radiobutton(label=name, variable=var, value=key, command=cmd)
+            mb["menu"] = menu
+        self.mb_head.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        self.mb_hand.grid(row=0, column=1, sticky="ew")
+        modes.columnconfigure((0, 1), weight=1)
+        self.mode_help = tk.StringVar()
+        ttk.Label(modes, textvariable=self.mode_help, wraplength=370, justify="left", foreground="#555").grid(
+            row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        ttk.Button(modes, text="Recentralizar cabeça  (Ctrl+Alt+R)", command=self.recenter).grid(
+            row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+
+        # ---- sensitivity (eye mode has none: its accuracy comes from the calibration)
+        sens = ttk.LabelFrame(f, text="Sensibilidade do movimento", padding=8)
+        sens.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(8, 3))
+        row += 1
+        self._sens_labels: dict[str, ttk.Label] = {}
+        for i, (label, attr) in enumerate((("Cabeça", "head_gain"), ("Mão", "hand_gain"), ("Rolagem", "scroll_gain"))):
+            ttk.Label(sens, text=label, width=8).grid(row=i, column=0, sticky="w")
+            val = ttk.Label(sens, width=5, text=f"{getattr(self.cfg, attr):.2f}")
+            scale = ttk.Scale(sens, from_=0.3, to=3.0, length=220, value=getattr(self.cfg, attr),
+                              command=lambda v, a=attr, lab=val: self._set_gain(a, float(v), lab))
+            scale.grid(row=i, column=1, padx=6)
+            val.grid(row=i, column=2)
+        self.scroll_var = tk.BooleanVar(value=self.cfg.hand_scroll)
+        self.natural_var = tk.BooleanVar(value=self.cfg.scroll_natural)
+        ttk.Checkbutton(sens, text="Rolar com a mão fechada", variable=self.scroll_var,
+                        command=lambda: self._set_flag("hand_scroll", self.scroll_var.get())).grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Checkbutton(sens, text="Inverter a direção da rolagem (natural)", variable=self.natural_var,
+                        command=lambda: self._set_flag("scroll_natural", self.natural_var.get())).grid(row=4, column=0, columnspan=3, sticky="w")
+
         self.btn_bubble = ttk.Button(f, text="", command=self.toggle_bubble)
         self.btn_learn = ttk.Button(f, text="", command=self.toggle_learn)
-        for i, b in enumerate((self.btn_calib, self.btn_image, self.btn_mouse, self.btn_bubble, self.btn_learn)):
-            b.grid(row=4 + i, column=0, columnspan=2, sticky="ew", pady=3)
-        ttk.Button(f, text="Configurações…", command=self.open_settings).grid(row=9, column=0, sticky="ew", pady=3, padx=(0, 3))
-        ttk.Button(f, text="Sair", command=self.quit).grid(row=9, column=1, sticky="ew", pady=3)
-        hints = ("Atalhos globais:\nCtrl+Alt+E  liga/desliga o mouse\nCtrl+Alt+B  mostra/oculta a bolha\n"
-                 "Ctrl+Alt+C  calibrar     Ctrl+Alt+Q  sair\n\nClique: pinça polegar+indicador (esquerdo)\n"
-                 "polegar+médio (direito). Segure para arrastar.")
-        ttk.Label(f, text=hints, foreground="#666").grid(row=10, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        for b in (self.btn_bubble, self.btn_learn):
+            b.grid(row=row, column=0, columnspan=2, sticky="ew", pady=3)
+            row += 1
+        ttk.Button(f, text="Configurações…", command=self.open_settings).grid(row=row, column=0, sticky="ew", pady=3, padx=(0, 3))
+        ttk.Button(f, text="Sair", command=self.quit).grid(row=row, column=1, sticky="ew", pady=3)
+        row += 1
+        hints = ("Atalhos globais: Ctrl+Alt+E mouse • B bolha • C calibrar • H modo da cabeça • M modo da mão\n"
+                 "R recentralizar • Q sair.  Clique: pinça polegar+indicador (esq.) / polegar+médio (dir.); segure para arrastar.")
+        ttk.Label(f, text=hints, foreground="#666", wraplength=380, justify="left").grid(row=row, column=0, columnspan=2, sticky="w", pady=(10, 0))
         self._refresh_buttons()
 
     def _refresh_buttons(self) -> None:
-        self.btn_mouse.configure(text=f"Mouse com os olhos: {'LIGADO' if self.tracker.mouse_enabled else 'DESLIGADO'}")
-        self.btn_bubble.configure(text=f"Bolha: {'VISÍVEL' if self.cfg.show_bubble else 'OCULTA'}")
-        self.btn_learn.configure(text=f"Aprender com cliques do mouse: {'SIM' if self.cfg.learn_from_clicks else 'NÃO'}")
+        cfg = self.cfg
+        self.btn_mouse.configure(text=f"Mouse: {'LIGADO' if self.tracker.mouse_enabled else 'DESLIGADO'}")
+        self.btn_bubble.configure(text=f"Bolha: {'VISÍVEL' if cfg.show_bubble else 'OCULTA'}")
+        self.btn_learn.configure(text=f"Aprender com cliques do mouse: {'SIM' if cfg.learn_from_clicks else 'NÃO'}")
+        self.head_var.set(cfg.head_mode)
+        self.hand_var.set(cfg.hand_mode)
+        self.mb_head.configure(text=f"Cabeça: {HEAD_MODES[cfg.head_mode]}  ▾")
+        self.mb_hand.configure(text=f"Mão: {HAND_MODES[cfg.hand_mode]}  ▾")
+        self.mode_help.set(HEAD_HELP[cfg.head_mode] + "\n" + HAND_HELP[cfg.hand_mode])
 
     # ---------------------------------------------------------------- actions
     def toggle_mouse(self) -> None:
-        if not self.tracker.mouse_enabled and not self.model.ready:
-            messagebox.showinfo("EyeMouse", "Calibre primeiro para controlar o mouse com os olhos.")
+        if not self.tracker.mouse_enabled and not self.tracker.mode_ready():
+            messagebox.showinfo("EyeMouse", "O modo Olho precisa de calibração. Calibre, ou escolha o modo de cabeça "
+                                            "'Cabeça' / de mão 'Mão relaxada move o cursor'.")
             return
+        if not self.tracker.mouse_enabled:
+            self.tracker.recenter_head()          # head pointing is relative to the pose at the moment you turn it on
         self.tracker.mouse_enabled = not self.tracker.mouse_enabled
         self._refresh_buttons()
+
+    def toggle_view(self) -> None:
+        """Open/close the 'Visão da câmera' window (annotated camera image with the gesture readings)."""
+        if self._view is not None:
+            self._view.close()
+            return
+        self._view = CameraView(self.root, self.tracker, self.cfg, on_close=self._view_closed)
+
+    def _view_closed(self) -> None:
+        self._view = None
 
     def toggle_bubble(self) -> None:
         self.cfg.show_bubble = not self.cfg.show_bubble
@@ -94,6 +175,42 @@ class App:
     def toggle_learn(self) -> None:
         self.cfg.learn_from_clicks = not self.cfg.learn_from_clicks
         self._refresh_buttons()
+
+    def _on_head_mode(self) -> None:
+        self.set_head_mode(self.head_var.get())
+
+    def _on_hand_mode(self) -> None:
+        self.set_hand_mode(self.hand_var.get())
+
+    def set_head_mode(self, mode: str) -> None:
+        self.cfg.head_mode = mode
+        if mode in ("head", "head_eye"):
+            self.tracker.recenter_head()
+        self.cfg.save()
+        self._refresh_buttons()
+
+    def set_hand_mode(self, mode: str) -> None:
+        self.cfg.hand_mode = mode
+        self.cfg.save()
+        self._refresh_buttons()
+
+    def cycle_head_mode(self) -> None:
+        keys = list(HEAD_MODES)
+        self.set_head_mode(keys[(keys.index(self.cfg.head_mode) + 1) % len(keys)])
+
+    def cycle_hand_mode(self) -> None:
+        keys = list(HAND_MODES)
+        self.set_hand_mode(keys[(keys.index(self.cfg.hand_mode) + 1) % len(keys)])
+
+    def recenter(self) -> None:
+        self.tracker.recenter_head()
+
+    def _set_gain(self, attr: str, value: float, label: ttk.Label) -> None:
+        setattr(self.cfg, attr, round(value, 2))
+        label.configure(text=f"{value:.2f}")
+
+    def _set_flag(self, attr: str, value: bool) -> None:
+        setattr(self.cfg, attr, bool(value))
 
     def open_settings(self) -> None:
         if self._settings is None or not self._settings.win.winfo_exists():
@@ -144,8 +261,9 @@ class App:
                 action = self.actions.get_nowait()
             except queue.Empty:
                 break
-            {"mouse": self.toggle_mouse, "bubble": self.toggle_bubble,
-             "calibrate": self.open_calibration, "quit": self.quit}[action]()
+            {"mouse": self.toggle_mouse, "bubble": self.toggle_bubble, "calibrate": self.open_calibration,
+             "head_mode": self.cycle_head_mode, "hand_mode": self.cycle_hand_mode, "recenter": self.recenter,
+             "quit": self.quit}[action]()
             if action == "quit":
                 return
         while not self.events.empty():
@@ -167,8 +285,13 @@ class App:
             err = f" • erro ≈ {self.model.cv_px:.0f} px" if self.model.cv_px else ""
             self.status["calib"].set(f"Calibração: {self.model.n_groups} alvos, {self.model.n_samples} amostras{err}")
         else:
-            self.status["calib"].set("Calibração: nenhuma")
-        self.status["mouse"].set("Mouse: " + ("controlado pelos olhos" if tr.mouse_active else "livre"))
+            self.status["calib"].set("Calibração: nenhuma (necessária só para o modo Olho)")
+        if tr.mouse_active:
+            src = SOURCE_NAMES.get(st.source if st else "none", "—")
+            scrolling = " • rolando" if st and st.scrolling else ""
+            self.status["mouse"].set(f"Mouse: controlado por {src}{scrolling}")
+        else:
+            self.status["mouse"].set("Mouse: livre" + ("" if tr.mode_ready() else " (modo atual precisa de calibração)"))
         self._refresh_buttons()
         self.root.after(200 if self.calibration is None else 500, self._tick)
 
