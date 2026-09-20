@@ -84,6 +84,7 @@ Dois menus no painel escolhem **o que move o mouse**. O modo é salvo e vale na 
 | **Cabeça** | Olho *(padrão)* | O cursor segue o olhar. A pose da cabeça continua entrando no modelo para **compensar** o erro, mas mexer a cabeça **não move** o mouse. Precisa de calibração. |
 | | Cabeça + olho | O olhar posiciona o cursor e virar a cabeça o desloca também (cabeça = movimento grosso, olho = ajuste fino). Precisa de calibração. |
 | | Cabeça | O cursor segue para onde o nariz aponta, relativo a uma pose neutra. Não precisa de calibração. |
+| | Desativado | Olho e cabeça **não movem** o mouse. Os gestos da mão continuam: com a mão em *Pinça* você usa o mouse físico e clica/rola com a mão; com *Mão relaxada move o cursor*, a mão também move. Não precisa de calibração. |
 | **Mão** | Pinça (clique) *(padrão)* | A mão só clica: polegar+indicador = esquerdo, polegar+médio = direito, segurar = arrastar. |
 | | Mão relaxada move o cursor + pinça | Basta a **mão estar visível**: ela move o cursor sem exigir nenhuma pose (não precisa apontar o dedo). A pinça clica **e a mão continua movendo o cursor durante a pinça** (é assim que se arrasta; o cursor segue o movimento *relativo* da mão a partir do clique, então o clique não vira arrasto sem querer). O **punho fechado** rola a página e para o cursor. Sem mão, vale o modo de cabeça. |
 
@@ -115,7 +116,7 @@ Use-a para ajustar a posição da mão: com a mão fora do quadro nada funciona 
   (ponta do polegar × ponta do indicador/médio, em unidades do tamanho da mão: 0 = encostadas, 1 = bem separadas; combina a medida na
   imagem e a 3D do MediaPipe). A tela inicial da calibração mostra o valor ao vivo de cada dedo.
 - Se a pinça não disparar ou disparar sem querer, aperte **`P`** na tela inicial da calibração. O assistente (15 s) mede a sua mão aberta
-  e em pinça, para indicador e médio, e define: o limiar de disparo de cada dedo (logo acima do nível de contato *da sua* pinça) e a
+  e em pinça, para indicador e médio, e define: o limiar de disparo de cada dedo (logo acima do nível de contato *da sua* pinça; o clique é **solto no primeiro quadro em que os dedos se afastam**, para a volta da mão não computar pinça) e a
   **guarda de punho**, que impede iniciar clique quando os outros três dedos estão dobrados (punho ou mão relaxada, onde o polegar
   fica perto das pontas sem intenção de clicar). Faça a pinça com os outros dedos **esticados**; se você pinça com eles dobrados,
   o assistente desliga a guarda. "Zerar calibração da pinça" está em *Configurações…*.

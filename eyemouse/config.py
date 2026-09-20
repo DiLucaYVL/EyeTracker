@@ -42,13 +42,27 @@ FACE_MODEL_PATH = find_model("face_landmarker.task", DATA_DIR, RESOURCE_DIR)
 HAND_MODEL_PATH = find_model("hand_landmarker.task", DATA_DIR, RESOURCE_DIR)
 
 
-HEAD_MODES = {"eye": "Olho", "head_eye": "Cabeça + olho", "head": "Cabeça"}
+HEAD_MODES = {"eye": "Olho", "head_eye": "Cabeça + olho", "head": "Cabeça", "off": "Desativado"}
 HAND_MODES = {"pinch": "Pinça (clique)", "hand": "Mão relaxada move o cursor + pinça"}
 
 # Bump when a *default* changes in a way old saved files must not override. Only the keys listed for a version are reset
 # when loading a file written before it (everything the user chose deliberately is kept).
-CONFIG_VERSION = 2
-RESET_ON_UPGRADE = {2: ("pinch_on_ratio", "pinch_off_ratio", "pinch_confirm_frames")}
+CONFIG_VERSION = 3
+RESET_ON_UPGRADE = {2: ("pinch_on_ratio", "pinch_off_ratio", "pinch_confirm_frames"),
+                    3: ("pinch_off_ratio", "pinch_release_frames")}
+
+
+def _rederive_pinch_thresholds(cfg: "Config") -> None:
+    """Version 3 changed how the pinch thresholds are derived (tighter, faster release). Files written by the
+    pinch calibration keep their measured contact level: recover it from the old formula and re-derive."""
+    for finger in ("index", "middle"):
+        on = getattr(cfg, f"pinch_on_{finger}")
+        if on <= 0:
+            continue
+        contact = max((on - 0.02) / 1.6, 0.0)                     # inverse of the version 2 rule: on = 1.6 * contact + 0.02
+        new_on = min(max(contact * 1.35 + 0.03, 0.15), 0.6)
+        setattr(cfg, f"pinch_on_{finger}", round(new_on, 3))
+        setattr(cfg, f"pinch_off_{finger}", round(min(max(new_on * 1.5, new_on + 0.1), max(0.6, new_on + 0.1)), 3))
 
 
 @dataclass
@@ -91,13 +105,14 @@ class Config:
     hand_clicks: bool = True
     hand_confidence: float = 0.5      # MediaPipe hand detection/tracking confidence (0.2-0.5 made no difference when the hand is in view)
     pinch_on_ratio: float = 0.25
-    pinch_off_ratio: float = 0.50
+    pinch_off_ratio: float = 0.45
     pinch_on_index: float = 0.0       # per-finger overrides written by the pinch calibration (0 = use the global values)
     pinch_off_index: float = 0.0
     pinch_on_middle: float = 0.0
     pinch_off_middle: float = 0.0
     pinch_fist_guard: bool = True     # never start a click while the other three fingers are curled (fist / relaxed hand)
     pinch_guard_curl: float = 1.5     # "curled" = wrist-to-fingertip distance below this many palm lengths (set by the wizard)
+    pinch_release_frames: int = 1     # frames the fingers must be apart before the click is released (fast: no drag on the way back)
     pinch_confirm_frames: int = 3     # ~0.15-0.2 s: removes accidental crossings while gesturing
     drag_hold_ms: int = 350
     # learning / calibration
@@ -123,6 +138,8 @@ class Config:
         for key, value in data.items():
             if key in known and key not in stale:
                 setattr(cfg, key, type(getattr(cfg, key))(value))
+        if int(data.get("config_version", 0)) < 3:
+            _rederive_pinch_thresholds(cfg)
         if cfg.head_mode not in HEAD_MODES:
             cfg.head_mode = "eye"
         if cfg.hand_mode not in HAND_MODES:

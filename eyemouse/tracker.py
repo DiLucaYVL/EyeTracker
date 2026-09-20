@@ -94,7 +94,7 @@ class Tracker(threading.Thread):
     def mode_ready(self) -> bool:
         """Can the selected modes drive the cursor? The eye modes need a calibration; head/hand pointing do not."""
         cfg = self.cfg
-        return self.model.ready or cfg.head_mode == "head" or cfg.hand_mode == "hand"
+        return self.model.ready or cfg.head_mode in ("head", "off") or cfg.hand_mode == "hand"
 
     @property
     def mouse_active(self) -> bool:
@@ -298,6 +298,8 @@ class Tracker(threading.Thread):
         if feat is None:
             return None, "none", False
         mode = cfg.head_mode
+        if mode == "off":
+            return None, "off", False                # eyes and head are disabled: they never touch the cursor
         if mode == "head":
             return head_target_px(feat, self._neutral(feat), screen, cfg.head_gain), "head", False
         if not self.model.ready:
@@ -333,6 +335,8 @@ class Tracker(threading.Thread):
                 self.events.put(("pinch", pinch, None, None, False))
             return
         self._shown_pinch = pinch
+        if self._src == "off":
+            self._cursor = None                      # clicks/scroll happen wherever the physical cursor is: never warp it
 
         # button state follows the pinch
         if pinch and self._pressed is None:

@@ -96,6 +96,22 @@ class CursorLogicTest(unittest.TestCase):
         self.mouse.button_down.assert_not_called()
 
 
+class OffModeClicksTest(unittest.TestCase):
+    def test_clicks_happen_where_the_physical_cursor_is_and_never_warp_it(self):
+        tracker = Tracker(Config(), ready_model(), queue.SimpleQueue())
+        tracker.mouse_enabled = True
+        tracker.cfg.head_mode = "off"
+        tracker._src = "off"
+        tracker._cursor = np.array([500.0, 500.0])              # a stale position from before eyes/head were disabled
+        with mock.patch("eyemouse.tracker.mouse") as m:
+            tracker._drive_mouse(0.0, None, False, "left")
+            m.button_down.assert_called_once_with("left")
+            m.move_to.assert_not_called()                        # the cursor is left alone
+            tracker._drive_mouse(0.3, None, False, None)
+            m.button_up.assert_called_once_with("left")
+        self.assertIsNone(tracker._cursor)
+
+
 class HandDragTest(unittest.TestCase):
     """Hand pointing: the pinch does not freeze the cursor; it follows the hand relatively from the click point."""
 
@@ -199,6 +215,26 @@ class ConfigMigrationTest(unittest.TestCase):
                          (default.pinch_confirm_frames, default.pinch_on_ratio, default.pinch_off_ratio))
         self.assertEqual(cfg.bubble_size, 150)                         # the user's own choices survive
         self.assertEqual(cfg.camera_props, {"gain": 5})
+
+    def test_pinch_thresholds_from_the_old_wizard_are_rederived_with_the_tighter_rule(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "config.json"
+            path.write_text('{"config_version": 2, "pinch_on_index": 0.362, "pinch_off_index": 0.723, '
+                            '"pinch_on_middle": 0.383, "pinch_off_middle": 0.766, "pinch_release_frames": 3}', encoding="utf-8")
+            cfg = Config.load(path)
+        for finger, old_on in (("index", 0.362), ("middle", 0.383)):
+            on, off = cfg.pinch_thresholds(finger)
+            self.assertLess(on, old_on)                                       # fires closer to the touch
+            self.assertLess(off, 0.55)                                        # ...and releases well before 0.72
+            self.assertGreaterEqual(off, on + 0.1)
+        self.assertEqual(cfg.pinch_release_frames, Config().pinch_release_frames)   # fast release replaces the stored 3
+
+    def test_uncalibrated_pinch_thresholds_stay_uncalibrated(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "config.json"
+            path.write_text('{"config_version": 2}', encoding="utf-8")
+            cfg = Config.load(path)
+        self.assertEqual((cfg.pinch_on_index, cfg.pinch_off_index), (0.0, 0.0))
 
     def test_current_files_are_not_reset(self):
         with tempfile.TemporaryDirectory() as d:

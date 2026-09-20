@@ -165,6 +165,21 @@ class TrackerModesTest(unittest.TestCase):
         self.cfg.hand_scroll = False                                          # scrolling switched off: pointing again
         self.assertEqual(self.select(hands=[hand_at(0.4, 0.6)])[1], "hand")
 
+    def test_off_mode_disables_eye_and_head_control_completely(self):
+        self.cfg.head_mode = "off"
+        self.assertEqual(self.select(), (None, "off", False))                  # face visible, calibrated: still nothing
+        self.assertEqual(self.select(closed=True), (None, "off", False))
+        self.tracker.model.clear()
+        self.assertTrue(self.tracker.mode_ready())                              # needs no calibration
+        self.tracker.mouse_enabled = True
+        self.assertTrue(self.tracker.mouse_active)                              # hand gestures (click/scroll) stay available
+
+    def test_off_mode_still_lets_the_hand_move_the_cursor_when_the_hand_mode_says_so(self):
+        self.cfg.head_mode, self.cfg.hand_mode = "off", "hand"
+        hand = hand_at(0.4, 0.6)
+        self.assertEqual(self.select(hands=[hand])[1:], ("hand", False))
+        self.assertEqual(self.select(hands=[])[1:], ("off", False))            # no hand: nothing moves the cursor
+
     def test_pinch_mode_never_moves_the_cursor_with_the_hand(self):
         self.cfg.hand_mode = "pinch"
         self.assertEqual(self.select(hands=[hand_at(0.4, 0.6)])[1], "eye")
@@ -201,7 +216,7 @@ class ConfigModesTest(unittest.TestCase):
     def test_defaults_and_names(self):
         cfg = Config()
         self.assertEqual((cfg.head_mode, cfg.hand_mode), ("eye", "pinch"))
-        self.assertEqual(set(HEAD_MODES), {"eye", "head_eye", "head"})
+        self.assertEqual(set(HEAD_MODES), {"eye", "head_eye", "head", "off"})
         self.assertEqual(set(HAND_MODES), {"pinch", "hand"})
 
     def test_invalid_saved_modes_fall_back_to_the_defaults(self):

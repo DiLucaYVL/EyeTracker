@@ -22,12 +22,13 @@ HEAD_HELP = {
     "eye": "Olho: o cursor segue o olhar. Mexer a cabeça NÃO move o mouse (a cabeça só ajuda a compensar o erro).",
     "head_eye": "Cabeça + olho: o olhar posiciona o cursor e virar a cabeça o desloca também.",
     "head": "Cabeça: o cursor segue para onde o nariz aponta (Recentralizar define o centro).",
+    "off": "Desativado: olho e cabeça não movem o mouse (use o mouse físico ou o modo de mão); os gestos da mão continuam ativos.",
 }
 HAND_HELP = {
     "pinch": "Mão: pinça polegar+indicador = clique esquerdo, polegar+médio = direito. Mão fechada rola a página.",
     "hand": "Mão: enquanto visível, a mão move o cursor (inclusive durante a pinça, para arrastar); a pinça clica e a mão fechada rola e para o cursor. Sem mão, vale o modo de cabeça.",
 }
-SOURCE_NAMES = {"eye": "olho", "head_eye": "cabeça + olho", "head": "cabeça", "hand": "mão", "none": "—"}
+SOURCE_NAMES = {"eye": "olho", "head_eye": "cabeça + olho", "head": "cabeça", "hand": "mão", "off": "gestos da mão (olho/cabeça desativados)", "none": "—"}
 
 
 class App:
@@ -61,7 +62,7 @@ class App:
             mouse.start_click_listener(self.tracker.on_physical_click),
         ]
         self.root.after(50, self._tick)
-        if calibrate_on_start or (not self.model.ready and cfg.head_mode != "head" and cfg.hand_mode != "hand"):
+        if calibrate_on_start or (not self.model.ready and cfg.head_mode not in ("head", "off") and cfg.hand_mode != "hand"):
             self.root.after(800, self.open_calibration)
 
     # ------------------------------------------------------------------ panel

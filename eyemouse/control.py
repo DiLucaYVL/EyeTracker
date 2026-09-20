@@ -5,6 +5,7 @@ Head modes (Config.head_mode):
                  head movement), but moving the head does NOT move the cursor.
   * "head_eye" - the gaze point places the cursor and turning the head shifts it as well (head = coarse, eyes = fine).
   * "head"     - the cursor follows where the nose points, relative to a neutral pose (see Tracker.recenter_head).
+  * "off"      - neither the eyes nor the head move the cursor (the physical mouse, or the hand mode, does).
 Hand modes (Config.hand_mode):
   * "pinch"    - the hand only clicks (thumb+index = left, thumb+middle = right).
   * "hand"     - the hand moves the cursor whenever it is visible and NOT performing another action (no pose is

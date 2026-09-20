@@ -80,14 +80,16 @@ def derive_guard_curl(pinch_other_curls: list[float] | np.ndarray) -> float | No
 def derive_thresholds(open_value: float, contact_value: float) -> tuple[float, float] | None:
     """(on, off) thresholds from a user's open-hand level and the level their fingertips reach when touching.
 
-    The trigger sits just above the contact level (1.6x, measured on real pinches: a threshold halfway to the open hand
-    made 25-30% of free-gesture frames fire), release at twice that. None if contact and open hand are not separable.
+    The trigger sits just above the contact level (1.35x: fires when the fingers are about to touch, not while they are
+    still closing in) and the release at 1.5x the trigger, well before the fingers look open. A release at twice the
+    trigger (0.72 on real data) kept the click pressed for ~0.15 s with the fingers visibly apart, which broke the
+    movement back. None if contact and open hand are not separable.
     """
     gap = open_value - contact_value
     if gap < 0.3:
         return None
-    on = min(max(contact_value * 1.6 + 0.02, 0.15), contact_value + 0.4 * gap, 0.6)
-    off = min(max(on * 2.0, on + 0.1), 0.9)
+    on = min(max(contact_value * 1.35 + 0.03, 0.15), contact_value + 0.4 * gap, 0.6)
+    off = min(max(on * 1.5, on + 0.1), max(0.6, on + 0.1))
     return round(on, 3), round(off, 3)
 
 
@@ -145,7 +147,7 @@ class PinchDetector:
             idx, off = (0, off_i) if self.active == "left" else (1, off_m)
             if min(m[idx] for m in metrics) > off:
                 self._release_n += 1
-                if self._release_n >= cfg.pinch_confirm_frames:
+                if self._release_n >= cfg.pinch_release_frames:
                     self.active, self._cand, self._cand_n = None, None, 0
             else:
                 self._release_n = 0

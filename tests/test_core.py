@@ -276,6 +276,18 @@ class PinchTest(unittest.TestCase):
         self.assertEqual(self.run_seq(PinchDetector(cfg), loose)[-1], "left")
         self.assertEqual(cfg.pinch_thresholds("middle"), (cfg.pinch_on_ratio, cfg.pinch_off_ratio))   # untouched finger
 
+    def test_the_click_is_released_as_soon_as_the_fingers_separate(self):
+        det = PinchDetector(Config())
+        out = self.run_seq(det, [(0.02, 0.09)] * 5 + [(0.06, 0.09)] + [(0.09, 0.09)] * 2)          # ratios 0.2, then 0.6, then 0.9
+        self.assertEqual(out[4], "left")
+        self.assertIsNone(out[5])                        # 0.6 > the release threshold (0.45): released on the very first frame
+        self.assertEqual(out[6:], [None, None])
+
+    def test_a_click_is_not_cut_by_jitter_inside_the_hysteresis_band(self):
+        det = PinchDetector(Config())
+        out = self.run_seq(det, [(0.02, 0.09)] * 4 + [(0.04, 0.09), (0.03, 0.09), (0.04, 0.09)] + [(0.02, 0.09)] * 3)   # 0.2 .. 0.4
+        self.assertEqual(out[3:], ["left"] * 7)          # never dropped: 0.4 stays under the release threshold
+
     def test_off_threshold_is_always_above_on(self):
         cfg = Config()
         cfg.pinch_on_index, cfg.pinch_off_index = 0.5, 0.4
@@ -353,9 +365,9 @@ class DeriveThresholdsTest(unittest.TestCase):
     def test_thresholds_sit_just_above_the_contact_level_and_below_the_open_hand(self):
         on, off = derive_thresholds(open_value=1.1, contact_value=0.13)     # the user's measured index pinch
         self.assertGreater(on, 0.13 * 1.3)
-        self.assertLess(on, 0.35)                                            # NOT halfway to the open hand (that fired on gestures)
+        self.assertLess(on, 0.30)                                            # NOT halfway to the open hand (that fired on gestures)
         self.assertGreater(off, on)
-        self.assertLess(off, 1.1)
+        self.assertLess(off, 0.5)                                            # released well before the fingers look open (was 0.72)
 
     def test_returns_none_when_open_and_pinched_are_not_separable(self):
         self.assertIsNone(derive_thresholds(open_value=0.5, contact_value=0.42))
