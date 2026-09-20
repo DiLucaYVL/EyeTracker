@@ -8,7 +8,7 @@ from .tracker import PREVIEW_SIZE
 
 BG, FG, DIM = "#0b0f14", "#e6edf3", "#8b949e"
 GOOD, WARN, ORANGE, PURPLE, BAD = "#3fb950", "#d29922", "#f0883e", "#a371f7", "#f85149"
-INFO_HEIGHT = 96
+INFO_HEIGHT = 120
 
 
 class CameraView:
@@ -68,18 +68,15 @@ class CameraView:
         cfg = self.cfg
         self._text(14, f"{st.fps:.0f} fps   rosto {'✓' if st.face_ok else '✗'}   mão {'✓' if st.hand_ok else '✗ (não detectada)'}",
                    GOOD if st.hand_ok else BAD, 11, True)
-        if st.scrolling:
-            state, color = f"PUNHO FECHADO — rolagem  (velocidade {st.scroll_speed:.2f} alturas/s)", PURPLE
-        elif st.pinch == "left":
-            state, color = "PINÇA: clique ESQUERDO (polegar + indicador)", GOOD
-        elif st.pinch == "right":
-            state, color = "PINÇA: clique DIREITO (polegar + médio)", ORANGE
-        elif st.hand_ok:
-            state, color = "mão detectada (aberta / sem gesto)", FG
-        else:
-            state, color = "sem mão", DIM
-        self._text(38, state, color, 12, True)
-        if st.ratios:
-            on_i, on_m = cfg.pinch_thresholds("index")[0], cfg.pinch_thresholds("middle")[0]
-            self._text(62, f"distância das pontas — indicador {st.ratios[0]:.2f} (dispara < {on_i:.2f})   médio {st.ratios[1]:.2f} (< {on_m:.2f})", DIM, 9)
-        self._text(82, f"cursor: origem {st.source}   |   roxo = rolagem, verde = clique esq., laranja = clique dir.", DIM, 9)
+        names = {"idle": "relaxada", "scroll": "ROLAGEM (polegar+anelar)", "pinch_left": "PINÇA esquerda", "pinch_right": "PINÇA direita"}
+        hands = "   |   ".join(f"mão {k + 1}: {names.get(s, s)}" for k, s in enumerate(st.hand_states)) or "sem mão"
+        color = PURPLE if any(s == "scroll" for s in st.hand_states) else GOOD if any(s == "pinch_left" for s in st.hand_states) \
+            else ORANGE if any(s == "pinch_right" for s in st.hand_states) else (FG if st.hand_ok else DIM)
+        self._text(38, hands, color, 12, True)
+        if any(s == "scroll" for s in st.hand_states):
+            self._text(60, f"velocidade da mão {st.scroll_speed:.2f} alturas/s (mova a mão para rolar)", PURPLE, 9)
+        elif st.ratios:
+            self._text(60, f"distância das pontas — indicador {st.ratios[0]:.2f}   médio {st.ratios[1]:.2f}   (dispara abaixo de "
+                           f"{cfg.pinch_thresholds()[0]:.2f})", DIM, 9)
+        self._text(80, f"bolas = pontas dos dedos ({cfg.pinch_ball_size * 100:.1f}% da mão): a pinça dispara quando duas se TOCAM (polegar+anelar rola)", DIM, 9)
+        self._text(100, f"cursor: origem {st.source}   |   roxo = rolagem, verde = clique esq., laranja = clique dir.", DIM, 9)

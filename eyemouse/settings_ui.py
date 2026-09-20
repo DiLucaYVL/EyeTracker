@@ -14,12 +14,10 @@ ROWS = [
     ("Tamanho da bolha (px)", "bubble_size", 40, 200, 2),
     ("Limiar de olho fechado (congela o cursor)", "blink_close_thr", 0.2, 0.9, 0.01),
     ("Limiar de olho aberto", "blink_open_thr", 0.1, 0.8, 0.01),
-    ("Pinça: dispara abaixo de (razão)", "pinch_on_ratio", 0.1, 0.6, 0.01),
-    ("Pinça: solta acima de (razão)", "pinch_off_ratio", 0.2, 0.9, 0.01),
     ("Segurar a pinça por (ms) para arrastar", "drag_hold_ms", 100, 1000, 10),
     ("Sensibilidade da cabeça (modos com cabeça)", "head_gain", 0.3, 3.0, 0.05),
     ("Sensibilidade da mão (mover o cursor)", "hand_gain", 0.3, 3.0, 0.05),
-    ("Sensibilidade da rolagem (mão fechada)", "scroll_gain", 0.3, 3.0, 0.05),
+    ("Sensibilidade da rolagem (polegar+anelar)", "scroll_gain", 0.3, 3.0, 0.05),
 ]
 
 
@@ -49,7 +47,7 @@ class SettingsWindow:
                         ).grid(row=r, column=0, columnspan=3, sticky="w", pady=(10, 0))
 
         self.scroll_var = tk.BooleanVar(value=cfg.hand_scroll)
-        ttk.Checkbutton(body, text="Rolar com a mão fechada", variable=self.scroll_var,
+        ttk.Checkbutton(body, text="Rolar com polegar+anelar", variable=self.scroll_var,
                         command=lambda: setattr(cfg, "hand_scroll", self.scroll_var.get())
                         ).grid(row=r + 1, column=0, columnspan=3, sticky="w")
         self.natural_var = tk.BooleanVar(value=cfg.scroll_natural)
@@ -63,7 +61,7 @@ class SettingsWindow:
 
         btns = ttk.Frame(body)
         btns.grid(row=r + 5, column=0, columnspan=3, pady=(12, 0), sticky="e")
-        ttk.Button(btns, text="Zerar calibração da pinça", command=self._reset_pinch).pack(side="left", padx=4)
+        ttk.Button(btns, text="Bola da pinça: padrão", command=self._reset_pinch).pack(side="left", padx=4)
         ttk.Button(btns, text="Salvar", command=self._save).pack(side="left", padx=4)
         ttk.Button(btns, text="Fechar", command=self.win.destroy).pack(side="left")
         self._closed = False
@@ -80,9 +78,8 @@ class SettingsWindow:
         label.configure(text=self._fmt(value, is_int))
 
     def _reset_pinch(self) -> None:
-        """Forget the per-finger thresholds measured by the pinch calibration; the sliders above apply again."""
-        for name in ("pinch_on_index", "pinch_off_index", "pinch_on_middle", "pinch_off_middle"):
-            setattr(self.cfg, name, 0.0)
+        """Back to the default ball size (the value measured by the pinch calibration is forgotten)."""
+        self.cfg.pinch_ball_size = Config().pinch_ball_size
 
     def _save(self) -> None:
         self.cfg.save()

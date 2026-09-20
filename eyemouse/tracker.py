@@ -14,7 +14,8 @@ from . import imaging, mouse
 from .blink import BlinkDetector
 from .camera_props import CAMERA_DEFAULTS, CAMERA_PROPS
 from .config import CALIBRATION_PATH, Config
-from .control import ScrollController, head_offset_px, head_target_px, hand_target_px, pointing_hand
+from .control import HandRoles, head_offset_px, head_target_px, hand_target_px, pointing_hand
+from .hands import ball_radius_px, hand_scale_px
 from .features import extract_features, eye_region_box, face_box
 from .filters import MedianFilter, OneEuroFilter
 from .gaze_model import GazeModel
@@ -49,7 +50,8 @@ class FrameState:
     head_vis: tuple[float, float] | None = None  # (dx, dy) nose offset in the mirrored view, for on-screen guidance
     source: str = "none"              # what drives the cursor now: eye | head_eye | head | hand | none
     scrolling: bool = False           # closed hand = scroll mode
-    scroll_speed: float = 0.0         # fist speed in frame heights per second
+    scroll_speed: float = 0.0         # scrolling hand speed in frame heights per second
+    hand_states: tuple[str, ...] = ()  # per visible hand: idle | scroll | pinch_left | pinch_right
 
 
 class Tracker(threading.Thread):
@@ -85,7 +87,7 @@ class Tracker(threading.Thread):
         self.head_neutral: np.ndarray | None = None   # (yaw, pitch) that maps to the screen centre in the head modes
         self._src = "none"
         self._hold_offset: np.ndarray | None = None   # hand pointing: cursor minus hand target, kept while pinching
-        self._scroll = ScrollController(cfg)
+        self._scroll = HandRoles(cfg)                  # per-hand scroll state (thumb+ring touch): both hands count
         self.frame_sink = None                        # optional callable(t, raw_frame): diagnostics / clip recording
         self._hand_hist: deque[tuple[float, np.ndarray]] = deque(maxlen=60)
         self.last_hands: tuple[list, tuple[int, int]] = ([], (640, 480))
@@ -236,15 +238,23 @@ class Tracker(threading.Thread):
         if face_ok and not closed:
             self._feat_hist.append((t, feat))
 
-        pinch = self._pinch.update(t, hands, (w, h)) if cfg.hand_clicks else None
         self.last_hands = (hands, (w, h))       # raw landmarks of the latest frame (diagnostics)
 
-        # closed hand = scroll mode (wheel events are sent below, once we know the mouse is under our control)
+        # thumb ball touching the ring-finger ball = scroll mode (wheel events are sent below, once the mouse is ours)
         if cfg.hand_scroll:
-            wheel = self._scroll.update(t, pointing_hand(hands) if hands else None, (w, h))
+            wheel = self._scroll.update(t, hands, (w, h))
         else:
             self._scroll.reset()
             wheel = (0, 0)
+
+        # pinch: the ONLY criterion is that the two fingertip balls touch. The one arbitration between gestures: a hand
+        # whose thumb is on the ring finger (scroll mode) does not click.
+        blocked = [cfg.hand_scroll and self._scroll.scrolling(i) for i in range(len(hands))]
+        pinch = self._pinch.update(t, hands, (w, h), blocked) if cfg.hand_clicks else None
+
+        states = tuple(
+            "scroll" if cfg.hand_scroll and self._scroll.scrolling(i) else (f"pinch_{pinch}" if pinch and i == self._pinch.hand_index else "idle")
+            for i in range(len(hands)))
 
         # cursor target: eye / head+eye / head / hand
         target, source, hold = self._select_target(feat, closed, hands, (w, h))
@@ -273,8 +283,7 @@ class Tracker(threading.Thread):
         preview = eye_preview = eye_stats = None
         if self.want_preview:
             image_mode = self.preview_mode == "image"
-            preview = self._make_preview(raw if self.show_original else frame, face, hands, pinch,
-                                         self._scroll.active and cfg.hand_scroll)
+            preview = self._make_preview(raw if self.show_original else frame, face, hands, states)
             if image_mode and face is not None:
                 eye_preview, eye_stats = self._make_eye_views(frame, raw, face)
         self._state = FrameState(
@@ -282,7 +291,7 @@ class Tracker(threading.Thread):
             brightness=float(frame[::8, ::8].mean()), fps=fps, hand_ok=bool(hands), pinch=pinch,
             ratios=self._pinch.ratios, preview=preview, eye_preview=eye_preview, eye_stats=eye_stats,
             head_vis=head_vis, source=source, scrolling=self._scroll.active and cfg.hand_scroll,
-            scroll_speed=self._scroll.speed)
+            scroll_speed=self._scroll.speed, hand_states=states)
         if self.frame_sink is not None:
             self.frame_sink(t, raw)
 
@@ -292,9 +301,11 @@ class Tracker(threading.Thread):
         cfg = self.cfg
         screen = self.model.screen
         if cfg.hand_mode == "hand" and hands:
-            if self._scroll.active and cfg.hand_scroll:
-                return None, "hand", True            # closed hand scrolls: the cursor stays where it is (a pinch does not freeze it)
-            return hand_target_px(pointing_hand(hands), screen, cfg.hand_gain), "hand", False
+            # both hands count: an idle hand points while the other one may be scrolling; a pinch never freezes it
+            hand = self._scroll.pointing(hands) if cfg.hand_scroll else pointing_hand(hands)
+            if hand is None:
+                return None, "hand", True            # every visible hand is scrolling: the cursor stays where it is
+            return hand_target_px(hand, screen, cfg.hand_gain), "hand", False
         if feat is None:
             return None, "none", False
         mode = cfg.head_mode
@@ -392,7 +403,7 @@ class Tracker(threading.Thread):
         self.model.save(CALIBRATION_PATH)
 
     # --------------------------------------------------------------- preview
-    def _make_preview(self, frame, face, hands, pinch, scrolling: bool = False) -> bytes | None:
+    def _make_preview(self, frame, face, hands, states=()) -> bytes | None:
         self._preview_n += 1
         if self._preview_n % 2:  # ~15 fps is plenty for the setup screen
             return self._state.preview if self._state else None
@@ -408,14 +419,27 @@ class Tracker(threading.Thread):
             x0, y0 = px((face.pts[:, 0].max(), face.pts[:, 1].min()))
             x1, y1 = px((face.pts[:, 0].min(), face.pts[:, 1].max()))
             cv2.rectangle(small, (x0, y0), (x1, y1), (255, 180, 60), 1)
-        color = {"left": (80, 220, 80), "right": (60, 160, 255)}.get(pinch, (255, 255, 255))
-        if scrolling:
-            color = (247, 129, 163)          # purple (BGR): closed hand = scroll mode
-        for hand in hands:
+        colors = {"idle": (255, 255, 255), "scroll": (247, 129, 163), "pinch_left": (80, 220, 80), "pinch_right": (60, 160, 255)}
+        ball = self.cfg.pinch_ball_size
+        for k, hand in enumerate(hands):
+            color = colors.get(states[k] if k < len(states) else "idle", colors["idle"])
             for a, b in HAND_LINKS:
                 cv2.line(small, px(hand.pts[a]), px(hand.pts[b]), color, 2)
-            for i in (4, 8, 12):
-                cv2.circle(small, px(hand.pts[i]), 6, color, -1)
+            # The fingertip balls have exactly the size of the click criterion: the click fires when two of them touch.
+            radius = max(3, int(round(ball_radius_px(ball, hand_scale_px(hand, PREVIEW_SIZE)))))
+            tips = {i: px(hand.pts[i]) for i in (4, 8, 12, 16)}
+            touching = {i: float(np.hypot(tips[4][0] - tips[i][0], tips[4][1] - tips[i][1])) <= 2 * radius for i in (8, 12, 16)}
+            # thumb ball colour = the gesture it is part of: green = left click (index), orange = right click (middle),
+            # purple = scroll (ring)
+            gesture = next((i for i in (16, 8, 12) if touching[i]), None)
+            fills = {4: gesture is not None, 8: touching[8], 12: touching[12], 16: touching[16]}
+            edge = {4: (235, 235, 235), 8: (255, 200, 110), 12: (110, 200, 255), 16: (230, 150, 200)}
+            fill = {8: (80, 220, 80), 12: (60, 160, 255), 16: (200, 90, 230)}
+            fill[4] = fill.get(gesture, (255, 255, 255))
+            for i in (4, 8, 12, 16):
+                if fills[i]:
+                    cv2.circle(small, tips[i], radius, fill[i], -1)
+                cv2.circle(small, tips[i], radius, edge[i], 2)
         rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
         return b"P6 %d %d 255\n" % (pw, ph) + rgb.tobytes()
 

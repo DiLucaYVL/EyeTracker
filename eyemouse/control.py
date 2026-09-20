@@ -8,10 +8,10 @@ Head modes (Config.head_mode):
   * "off"      - neither the eyes nor the head move the cursor (the physical mouse, or the hand mode, does).
 Hand modes (Config.hand_mode):
   * "pinch"    - the hand only clicks (thumb+index = left, thumb+middle = right).
-  * "hand"     - the hand moves the cursor whenever it is visible and NOT performing another action (no pose is
-                 required, e.g. no pointing finger). A pinch clicks and the hand keeps moving the cursor while pinching
-                 (that is how you drag); a closed hand scrolls and the cursor stays put. Without a hand the head mode
-                 takes over.
+  * "hand"     - the TIP OF THE INDEX FINGER (its ball) moves the cursor while a hand is visible. A pinch (the thumb
+                 ball touching the index ball) clicks and the fingertip keeps moving the cursor while pinching (that is
+                 how you drag); touching the thumb ball to the RING-finger ball scrolls (see below) and the cursor
+                 stays put. Both hands count. Without a hand the head mode takes over.
 """
 from __future__ import annotations
 
@@ -20,12 +20,12 @@ import numpy as np
 from .landmarks import HandData
 
 INDEX_TIP, WRIST, MIDDLE_MCP = 8, 0, 9
-PALM_POINTS = (0, 5, 9, 13, 17)          # wrist + the four knuckles (used to measure the fist's movement)
+PALM_POINTS = (0, 5, 9, 13, 17)          # wrist + the four knuckles (used to measure the hand's movement)
 
 # Head rotation (radians, each side of the neutral pose) that sweeps the whole screen at gain 1: ~25 deg / ~15 deg.
 HEAD_YAW_RANGE = 0.44
 HEAD_PITCH_RANGE = 0.26
-# Fraction of the camera frame (width, height) the palm travels to sweep the whole screen at gain 1.
+# Fraction of the camera frame (width, height) the fingertip travels to sweep the whole screen at gain 1.
 HAND_RANGE = (0.55, 0.45)
 
 
@@ -51,16 +51,9 @@ def head_target_px(feat: np.ndarray, neutral, screen: tuple[int, int], gain: flo
     return clip_to_screen(centre + head_offset_px(feat[5], feat[6], neutral, screen, gain), screen)
 
 
-def hand_position(hand: HandData) -> np.ndarray:
-    """Where the hand is in the image (normalised): the centre of the box around all 21 landmarks."""
-    pts = hand.pts[:, :2].astype(np.float64)
-    return (pts.min(axis=0) + pts.max(axis=0)) / 2.0
-
-
 def hand_target_px(hand: HandData, screen: tuple[int, int], gain: float = 1.0, centre=(0.5, 0.5)) -> np.ndarray:
-    """The idle hand's position -> screen position (mirrored, like a mirror: moving the hand right moves the cursor
-    right)."""
-    x, y = hand_position(hand)
+    """Index fingertip -> screen position (mirrored, like a mirror: moving the hand right moves the cursor right)."""
+    x, y = float(hand.pts[INDEX_TIP, 0]), float(hand.pts[INDEX_TIP, 1])
     gain = max(gain, 1e-3)
     u = 0.5 + (centre[0] - x) / (HAND_RANGE[0] / gain)
     v = 0.5 + (y - centre[1]) / (HAND_RANGE[1] / gain)
@@ -73,34 +66,35 @@ def pointing_hand(hands: list[HandData]) -> HandData:
 
 
 # ---------------------------------------------------------------------------------------------- hand scroll
-# A closed hand scrolls like a two-finger touchpad gesture: the faster the fist moves, the faster the page scrolls.
+# Thumb ball touching the ring-finger ball = scroll mode; then moving the hand scrolls like a two-finger touchpad
+# gesture: the faster the hand moves, the faster the page scrolls.
 from .config import Config  # noqa: E402
-from .hands import finger_curls  # noqa: E402
+from .hands import scroll_touch  # noqa: E402
 
 WHEEL_DELTA = 120                      # one wheel notch
-FIST_ENTER, FIST_EXIT, FIST_FRAMES = 1.15, 1.4, 3   # wrist-to-fingertip curl of the *most extended* finger (measured on recordings)
-SCROLL_DEADZONE = 0.08                 # fist speed (frame heights per second) below which nothing scrolls
+SCROLL_ENTER_FRAMES, SCROLL_EXIT_FRAMES = 2, 2   # consecutive frames touching / not touching to enter / leave scroll mode
+SCROLL_DEADZONE = 0.08                 # hand speed (frame heights per second) below which nothing scrolls
 SCROLL_BASE, SCROLL_EXPONENT = 14.0, 1.4
 SCROLL_MAX_NOTCHES_PER_S = 60.0
-LOST_HAND_S = 0.5                      # a closed hand is often lost for a moment while it moves: keep scroll mode
+LOST_HAND_S = 0.5                      # a moving hand is often lost for a moment: keep scroll mode
 GAP_RESET_S = 0.3                      # after a dropout this long the hand may have jumped: restart the velocity estimate
 
 
 def scroll_rate(speed: float, gain: float = 1.0) -> float:
-    """Wheel notches per second for a fist moving at `speed` frame heights per second (superlinear: flicks scroll fast)."""
+    """Wheel notches per second for a hand moving at `speed` frame heights per second (superlinear: flicks scroll fast)."""
     over = max(speed - SCROLL_DEADZONE, 0.0)
     return min(gain * SCROLL_BASE * over ** SCROLL_EXPONENT, SCROLL_MAX_NOTCHES_PER_S)
 
 
 def palm_center(hand: HandData, size: tuple[int, int]) -> np.ndarray:
-    """Palm centre in units of the frame height (x is aspect-corrected), stable while the fingers close."""
+    """Palm centre in units of the frame height (x is aspect-corrected), stable while the fingers move."""
     w, h = size
     c = hand.pts[list(PALM_POINTS), :2].astype(np.float64).mean(axis=0)
     return np.array([c[0] * w / h, c[1]])
 
 
 class ScrollController:
-    """Turns fist movement into wheel deltas. `active` is True while the hand is closed (scroll mode)."""
+    """Turns hand movement into wheel deltas. `active` is True while thumb and ring finger touch (scroll mode)."""
 
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -124,14 +118,13 @@ class ScrollController:
             self._enter_n = 0
             return 0, 0
         self._last_seen = t
-        curl = max(finger_curls(hand).values())
         if not self.active:
-            self._enter_n = self._enter_n + 1 if curl < FIST_ENTER else 0
-            if self._enter_n >= FIST_FRAMES:
+            self._enter_n = self._enter_n + 1 if scroll_touch(hand, self.cfg, size, strict=True) else 0
+            if self._enter_n >= SCROLL_ENTER_FRAMES:
                 self.active, self._exit_n, self._prev, self._vel, self._acc = True, 0, None, np.zeros(2), np.zeros(2)
             return 0, 0
-        self._exit_n = self._exit_n + 1 if curl > FIST_EXIT else 0
-        if self._exit_n >= 2:
+        self._exit_n = 0 if scroll_touch(hand, self.cfg, size, strict=False) else self._exit_n + 1
+        if self._exit_n >= SCROLL_EXIT_FRAMES:
             self.reset()
             return 0, 0
 
@@ -164,3 +157,82 @@ class ScrollController:
                 out[i] = int(self._acc[i])
                 self._acc[i] -= out[i]
         return out[0], out[1]
+
+
+class HandRoles:
+    """Both hands count. Each visible hand gets a stable id and its own scroll state, so one hand can point (or stay
+    idle) while the other one touches thumb and ring finger and scrolls. Pinching is tracked by PinchDetector."""
+
+    ASSOC_DIST = 0.30      # frame heights: max movement between frames for a hand to keep its id
+    FORGET_S = 1.0         # ids of hands that vanished are forgotten after this long
+
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
+        self.reset()
+
+    def reset(self) -> None:
+        self._scrolls: dict[int, ScrollController] = {}
+        self._last: dict[int, tuple[float, np.ndarray]] = {}
+        self._ids: list[int] = []
+        self._next_id = 0
+        self._pointer_id: int | None = None
+
+    @property
+    def active(self) -> bool:
+        return any(c.active for c in self._scrolls.values())
+
+    @property
+    def speed(self) -> float:
+        return max((c.speed for c in self._scrolls.values() if c.active), default=0.0)
+
+    def scrolling(self, index: int) -> bool:
+        """Is the `index`-th hand of the latest update() in scroll mode (thumb touching the ring finger)?"""
+        if index >= len(self._ids):
+            return False
+        ctrl = self._scrolls.get(self._ids[index])
+        return bool(ctrl and ctrl.active)
+
+    def _associate(self, t: float, centres: list[np.ndarray]) -> list[int]:
+        known = {i: p for i, (ts, p) in self._last.items() if t - ts <= self.FORGET_S}
+        pairs = sorted(((float(np.linalg.norm(c - p)), k, i) for k, c in enumerate(centres) for i, p in known.items()))
+        ids: list[int | None] = [None] * len(centres)
+        used: set[int] = set()
+        for dist, k, i in pairs:
+            if dist <= self.ASSOC_DIST and ids[k] is None and i not in used:
+                ids[k] = i
+                used.add(i)
+        for k in range(len(ids)):
+            if ids[k] is None:
+                ids[k], self._next_id = self._next_id, self._next_id + 1
+        return ids  # type: ignore[return-value]
+
+    def update(self, t: float, hands: list[HandData], size: tuple[int, int]) -> tuple[int, int]:
+        """Feed every visible hand; returns the (vertical, horizontal) wheel units to send (sum over closed hands)."""
+        centres = [palm_center(h, size) for h in hands]
+        ids = self._associate(t, centres)
+        wheel = [0, 0]
+        for hid, hand, centre in zip(ids, hands, centres):
+            self._last[hid] = (t, centre)
+            dv, dh = self._scrolls.setdefault(hid, ScrollController(self.cfg)).update(t, hand, size)
+            wheel[0] += dv
+            wheel[1] += dh
+        for hid in list(self._scrolls):
+            if hid not in ids:
+                self._scrolls[hid].update(t, None, size)           # lets the dropout timer run
+                if t - self._last.get(hid, (-1e9, None))[0] > self.FORGET_S:
+                    del self._scrolls[hid]
+                    self._last.pop(hid, None)
+        self._ids = ids
+        if self._pointer_id is not None and self._pointer_id not in ids and t - self._last.get(self._pointer_id, (-1e9, None))[0] > self.FORGET_S:
+            self._pointer_id = None
+        return wheel[0], wheel[1]
+
+    def pointing(self, hands: list[HandData]) -> HandData | None:
+        """The hand that moves the cursor: an idle one (not scrolling), preferring the one that was already pointing."""
+        idle = [k for k in range(len(hands)) if not self.scrolling(k)]
+        if not idle:
+            return None
+        keep = [k for k in idle if k < len(self._ids) and self._ids[k] == self._pointer_id]
+        k = keep[0] if keep else max(idle, key=lambda j: float(np.linalg.norm(hands[j].pts[WRIST, :2] - hands[j].pts[MIDDLE_MCP, :2])))
+        self._pointer_id = self._ids[k] if k < len(self._ids) else None
+        return hands[k]

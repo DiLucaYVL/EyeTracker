@@ -43,26 +43,30 @@ HAND_MODEL_PATH = find_model("hand_landmarker.task", DATA_DIR, RESOURCE_DIR)
 
 
 HEAD_MODES = {"eye": "Olho", "head_eye": "Cabeça + olho", "head": "Cabeça", "off": "Desativado"}
-HAND_MODES = {"pinch": "Pinça (clique)", "hand": "Mão relaxada move o cursor + pinça"}
+HAND_MODES = {"pinch": "Pinça (clique)", "hand": "Ponta do indicador move o cursor + pinça"}
 
 # Bump when a *default* changes in a way old saved files must not override. Only the keys listed for a version are reset
 # when loading a file written before it (everything the user chose deliberately is kept).
-CONFIG_VERSION = 3
+CONFIG_VERSION = 4
 RESET_ON_UPGRADE = {2: ("pinch_on_ratio", "pinch_off_ratio", "pinch_confirm_frames"),
-                    3: ("pinch_off_ratio", "pinch_release_frames")}
+                    3: ("pinch_off_ratio", "pinch_release_frames"),
+                    4: ("pinch_confirm_frames", "pinch_release_frames")}
 
 
-def _rederive_pinch_thresholds(cfg: "Config") -> None:
-    """Version 3 changed how the pinch thresholds are derived (tighter, faster release). Files written by the
-    pinch calibration keep their measured contact level: recover it from the old formula and re-derive."""
+def _migrate_pinch_ball(cfg: "Config", data: dict) -> None:
+    """Version 4 replaced the per-finger pinch thresholds by one ball size (the click fires when the two drawn balls touch).
+    A file written by the pinch calibration keeps the user's measured contact level: recover it from the rule that
+    produced the stored threshold (version 2: 1.6 * contact + 0.02, version 3: 1.35 * contact + 0.03) and re-derive."""
+    version = int(data.get("config_version", 0))
+    scale, offset = (1.6, 0.02) if version < 3 else (1.35, 0.03)
+    ons = []
     for finger in ("index", "middle"):
-        on = getattr(cfg, f"pinch_on_{finger}")
-        if on <= 0:
-            continue
-        contact = max((on - 0.02) / 1.6, 0.0)                     # inverse of the version 2 rule: on = 1.6 * contact + 0.02
-        new_on = min(max(contact * 1.35 + 0.03, 0.15), 0.6)
-        setattr(cfg, f"pinch_on_{finger}", round(new_on, 3))
-        setattr(cfg, f"pinch_off_{finger}", round(min(max(new_on * 1.5, new_on + 0.1), max(0.6, new_on + 0.1)), 3))
+        stored = float(data.get(f"pinch_on_{finger}", 0) or 0)
+        if stored > 0:
+            contact = max((stored - offset) / scale, 0.0)
+            ons.append(min(max(contact + 0.03, 0.15), 0.6))
+    if ons:
+        cfg.pinch_ball_size = round(min(max(max(ons) / 2.0, 0.03), 0.30), 4)
 
 
 @dataclass
@@ -104,27 +108,21 @@ class Config:
     # hand pinch clicks (ratio = thumb-to-fingertip distance / palm length)
     hand_clicks: bool = True
     hand_confidence: float = 0.5      # MediaPipe hand detection/tracking confidence (0.2-0.5 made no difference when the hand is in view)
-    pinch_on_ratio: float = 0.25
-    pinch_off_ratio: float = 0.45
-    pinch_on_index: float = 0.0       # per-finger overrides written by the pinch calibration (0 = use the global values)
-    pinch_off_index: float = 0.0
-    pinch_on_middle: float = 0.0
-    pinch_off_middle: float = 0.0
-    pinch_fist_guard: bool = True     # never start a click while the other three fingers are curled (fist / relaxed hand)
-    pinch_guard_curl: float = 1.5     # "curled" = wrist-to-fingertip distance below this many palm lengths (set by the wizard)
-    pinch_release_frames: int = 1     # frames the fingers must be apart before the click is released (fast: no drag on the way back)
-    pinch_confirm_frames: int = 3     # ~0.15-0.2 s: removes accidental crossings while gesturing
+    pinch_ball_size: float = 0.095    # radius of the fingertip "balls" as a fraction of the hand size: the click starts when they touch
+    pinch_release_frames: int = 1     # frames the balls must be apart before the click is released (1 = immediately)
+    pinch_confirm_frames: int = 1     # consecutive frames the balls must touch (1 = immediately: touching is the only criterion)
+    pinch_release_margin: float = 0.0  # extra distance (fraction) before a held pinch is released (0 = as soon as they stop touching)
     drag_hold_ms: int = 350
     # learning / calibration
     learn_from_clicks: bool = True
     calibration_points: int = 16
     calibration_head: bool = True     # second calibration phase: look at the targets while moving the head
 
-    def pinch_thresholds(self, finger: str) -> tuple[float, float]:
-        """(on, off) for "index" or "middle": the calibrated values if present, otherwise the global ones."""
-        on = getattr(self, f"pinch_on_{finger}") or self.pinch_on_ratio
-        off = getattr(self, f"pinch_off_{finger}") or self.pinch_off_ratio
-        return on, max(off, on + 0.05)
+    def pinch_thresholds(self, finger: str = "index") -> tuple[float, float]:
+        """(trigger, release) fingertip distance in hand sizes: the balls touch at two radii and, by default, the pinch
+        ends at that same distance (touching is the only criterion)."""
+        on = 2.0 * self.pinch_ball_size
+        return on, on * (1.0 + max(self.pinch_release_margin, 0.0))
 
     @classmethod
     def load(cls, path: Path = CONFIG_PATH) -> "Config":
@@ -138,8 +136,8 @@ class Config:
         for key, value in data.items():
             if key in known and key not in stale:
                 setattr(cfg, key, type(getattr(cfg, key))(value))
-        if int(data.get("config_version", 0)) < 3:
-            _rederive_pinch_thresholds(cfg)
+        if int(data.get("config_version", 0)) < 4:
+            _migrate_pinch_ball(cfg, data)
         if cfg.head_mode not in HEAD_MODES:
             cfg.head_mode = "eye"
         if cfg.hand_mode not in HAND_MODES:

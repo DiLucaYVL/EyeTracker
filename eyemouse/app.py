@@ -25,8 +25,8 @@ HEAD_HELP = {
     "off": "Desativado: olho e cabeça não movem o mouse (use o mouse físico ou o modo de mão); os gestos da mão continuam ativos.",
 }
 HAND_HELP = {
-    "pinch": "Mão: pinça polegar+indicador = clique esquerdo, polegar+médio = direito. Mão fechada rola a página.",
-    "hand": "Mão: enquanto visível, a mão move o cursor (inclusive durante a pinça, para arrastar); a pinça clica e a mão fechada rola e para o cursor. Sem mão, vale o modo de cabeça.",
+    "pinch": "Mão: pinça polegar+indicador = clique esquerdo, polegar+médio = direito, polegar+anelar = rolagem (mova a mão).",
+    "hand": "Mão: a ponta do dedo indicador move o cursor (também durante a pinça, para arrastar); pinça = bolas do polegar e do indicador/médio se tocam; polegar+anelar rola (mova a mão). As duas mãos valem. Sem mão, vale o modo de cabeça.",
 }
 SOURCE_NAMES = {"eye": "olho", "head_eye": "cabeça + olho", "head": "cabeça", "hand": "mão", "off": "gestos da mão (olho/cabeça desativados)", "none": "—"}
 
@@ -119,10 +119,23 @@ class App:
             val.grid(row=i, column=2)
         self.scroll_var = tk.BooleanVar(value=self.cfg.hand_scroll)
         self.natural_var = tk.BooleanVar(value=self.cfg.scroll_natural)
-        ttk.Checkbutton(sens, text="Rolar com a mão fechada", variable=self.scroll_var,
+        ttk.Checkbutton(sens, text="Rolar com polegar+anelar", variable=self.scroll_var,
                         command=lambda: self._set_flag("hand_scroll", self.scroll_var.get())).grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
         ttk.Checkbutton(sens, text="Inverter a direção da rolagem (natural)", variable=self.natural_var,
                         command=lambda: self._set_flag("scroll_natural", self.natural_var.get())).grid(row=4, column=0, columnspan=3, sticky="w")
+
+        # ---- pinch ball size: typed value, in % of the hand size (radius). The click fires when two balls touch.
+        ttk.Label(sens, text="Bola da pinça", width=12).grid(row=5, column=0, sticky="w", pady=(8, 0))
+        self.ball_var = tk.StringVar(value=f"{self.cfg.pinch_ball_size * 100:.1f}")
+        self.ball_spin = ttk.Spinbox(sens, from_=3.0, to=30.0, increment=0.5, width=7, textvariable=self.ball_var,
+                                     command=self._apply_ball)
+        self.ball_spin.grid(row=5, column=1, sticky="w", padx=6, pady=(8, 0))
+        ttk.Label(sens, text="% da mão").grid(row=5, column=2, sticky="w", pady=(8, 0))
+        for seq in ("<Return>", "<KP_Enter>", "<FocusOut>"):
+            self.ball_spin.bind(seq, self._apply_ball)
+        ttk.Label(sens, text="Digite o tamanho (3–30). A pinça só vale quando as duas bolas (pontas dos dedos, veja em "
+                             "'Ver câmera') se tocam: bola maior = dispara com os dedos mais afastados.",
+                  wraplength=360, justify="left", foreground="#555").grid(row=6, column=0, columnspan=3, sticky="w")
 
         self.btn_bubble = ttk.Button(f, text="", command=self.toggle_bubble)
         self.btn_learn = ttk.Button(f, text="", command=self.toggle_learn)
@@ -147,12 +160,17 @@ class App:
         self.mb_head.configure(text=f"Cabeça: {HEAD_MODES[cfg.head_mode]}  ▾")
         self.mb_hand.configure(text=f"Mão: {HAND_MODES[cfg.hand_mode]}  ▾")
         self.mode_help.set(HEAD_HELP[cfg.head_mode] + "\n" + HAND_HELP[cfg.hand_mode])
+        try:                                        # do not overwrite what the user is typing; follow changes made elsewhere (wizard)
+            if self.root.focus_get() is not self.ball_spin:
+                self.ball_var.set(f"{cfg.pinch_ball_size * 100:.1f}")
+        except KeyError:
+            pass
 
     # ---------------------------------------------------------------- actions
     def toggle_mouse(self) -> None:
         if not self.tracker.mouse_enabled and not self.tracker.mode_ready():
             messagebox.showinfo("EyeMouse", "O modo Olho precisa de calibração. Calibre, ou escolha o modo de cabeça "
-                                            "'Cabeça' / de mão 'Mão relaxada move o cursor'.")
+                                            "'Cabeça' / de mão 'Ponta do indicador move o cursor'.")
             return
         if not self.tracker.mouse_enabled:
             self.tracker.recenter_head()          # head pointing is relative to the pose at the moment you turn it on
@@ -209,6 +227,17 @@ class App:
     def _set_gain(self, attr: str, value: float, label: ttk.Label) -> None:
         setattr(self.cfg, attr, round(value, 2))
         label.configure(text=f"{value:.2f}")
+
+    def _apply_ball(self, event=None) -> None:
+        """The ball size typed in the menu (percent of the hand size). Invalid text falls back to the current value."""
+        try:
+            value = float(self.ball_var.get().replace(",", "."))
+        except ValueError:
+            value = None
+        if value is not None:
+            self.cfg.pinch_ball_size = round(min(max(value, 3.0), 30.0) / 100.0, 4)
+            self.cfg.save()
+        self.ball_var.set(f"{self.cfg.pinch_ball_size * 100:.1f}")
 
     def _set_flag(self, attr: str, value: bool) -> None:
         setattr(self.cfg, attr, bool(value))

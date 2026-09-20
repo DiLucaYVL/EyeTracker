@@ -1,4 +1,4 @@
-"""Control modes (eye / head+eye / head, pinch / hand pointing) and the closed-hand scroll."""
+"""Control modes (eye / head+eye / head, pinch / hand pointing), both hands, and the thumb+ring-finger scroll."""
 from __future__ import annotations
 
 import ctypes
@@ -9,8 +9,7 @@ import numpy as np
 
 from eyemouse import control, mouse
 from eyemouse.config import HAND_MODES, HEAD_MODES, Config
-from eyemouse.control import ScrollController, hand_target_px, head_offset_px, head_target_px, scroll_rate
-from eyemouse.hands import FINGER_TIPS
+from eyemouse.control import HandRoles, ScrollController, hand_target_px, head_offset_px, head_target_px, scroll_rate
 from eyemouse.landmarks import HandData
 from eyemouse.tracker import Tracker
 from tests.test_tracker import ready_model
@@ -25,20 +24,21 @@ def feat_with(yaw=0.0, pitch=0.0):
     return f
 
 
-def hand_at(x, y, curl=1.9, tip=None):
-    """A hand whose palm is centred at normalised image position (x, y); every finger at `curl` palm lengths."""
-    world = np.zeros((21, 3))
-    world[9] = (0, 0.1, 0)
-    dirs = {"index": (-0.3, 1.0), "middle": (0.0, 1.0), "ring": (0.3, 1.0), "pinky": (0.6, 1.0)}
-    for name, i in FINGER_TIPS.items():
-        v = np.array(dirs[name]) / np.linalg.norm(dirs[name])
-        world[i, :2] = v * 0.1 * curl
+def hand_at(x, y, scroll=False, tip=None):
+    """A hand whose palm is centred at normalised image position (x, y).
+
+    The index fingertip (the pointer) is at `tip`, by default straight above the palm. The thumb rests away from every
+    finger, unless `scroll`: then its ball touches the ring-finger ball (the scroll gesture).
+    """
     pts = np.zeros((21, 3))
     pts[:, :2] = (x, y)
-    for idx, (dx, dy) in {0: (-0.01, 0.08), 5: (-0.05, -0.02), 9: (-0.01, -0.04), 13: (0.02, -0.02), 17: (0.05, 0.0)}.items():
+    for idx, (dx, dy) in {0: (-0.01, 0.08), 5: (-0.05, -0.02), 9: (-0.01, -0.04), 13: (0.02, -0.02), 17: (0.05, 0.0),
+                          12: (0.0, -0.10), 16: (0.04, -0.09), 20: (0.07, -0.07), 4: (0.15, 0.05)}.items():
         pts[idx, :2] = (x + dx, y + dy)
-    pts[8, :2] = tip if tip is not None else (x, y - 0.08)          # the box around the hand is centred on (x, y)
-    return HandData(pts, world)
+    pts[8, :2] = tip if tip is not None else (x, y - 0.08)
+    if scroll:
+        pts[4, :2] = pts[16, :2] + (0.002, 0.002)
+    return HandData(pts, np.zeros((21, 3)))
 
 
 class HeadPointingTest(unittest.TestCase):
@@ -65,28 +65,31 @@ class HeadPointingTest(unittest.TestCase):
 
 
 class HandPointingTest(unittest.TestCase):
+    """The pointer is the tip of the index finger (its ball), not the hand as a whole."""
+
     def test_centre_of_the_frame_is_the_centre_of_the_screen(self):
-        target = hand_target_px(hand_at(0.5, 0.5), SCREEN)
+        target = hand_target_px(hand_at(0.5, 0.65, tip=(0.5, 0.5)), SCREEN)
         np.testing.assert_allclose(target, [SCREEN[0] / 2, SCREEN[1] / 2], atol=1.0)
 
-    def test_the_whole_hand_position_moves_the_cursor_whatever_the_pose(self):
-        # no pointing finger is needed: the position of the hand as a whole is what counts
-        a = hand_target_px(hand_at(0.4, 0.5), SCREEN)
-        b = hand_target_px(hand_at(0.4, 0.5, curl=0.9), SCREEN)         # same place, fingers curled: same target
+    def test_only_the_index_fingertip_moves_the_cursor(self):
+        a = hand_target_px(hand_at(0.4, 0.6, tip=(0.4, 0.5)), SCREEN)
+        b = hand_target_px(hand_at(0.7, 0.3, tip=(0.4, 0.5)), SCREEN)      # whole hand elsewhere, same fingertip
         np.testing.assert_allclose(a, b)
-        self.assertNotEqual(hand_target_px(hand_at(0.3, 0.5), SCREEN)[0], a[0])
+        c = hand_target_px(hand_at(0.4, 0.6, tip=(0.45, 0.5)), SCREEN)              # same hand, fingertip moved
+        self.assertNotEqual(a[0], c[0])
 
     def test_the_view_is_mirrored_like_a_mirror(self):
-        to_users_right = hand_target_px(hand_at(0.3, 0.5), SCREEN)     # image left = the user's right
-        to_users_left = hand_target_px(hand_at(0.7, 0.5), SCREEN)
+        to_users_right = hand_target_px(hand_at(0.3, 0.5, tip=(0.3, 0.5)), SCREEN)     # image left = the user's right
+        to_users_left = hand_target_px(hand_at(0.7, 0.5, tip=(0.7, 0.5)), SCREEN)
         self.assertGreater(to_users_right[0], SCREEN[0] / 2)
         self.assertLess(to_users_left[0], SCREEN[0] / 2)
 
     def test_lower_in_the_frame_is_lower_on_the_screen(self):
-        self.assertGreater(hand_target_px(hand_at(0.5, 0.65), SCREEN)[1], hand_target_px(hand_at(0.5, 0.35), SCREEN)[1])
+        self.assertGreater(hand_target_px(hand_at(0.5, 0.5, tip=(0.5, 0.65)), SCREEN)[1],
+                           hand_target_px(hand_at(0.5, 0.5, tip=(0.5, 0.35)), SCREEN)[1])
 
     def test_higher_gain_needs_less_hand_travel(self):
-        h = hand_at(0.4, 0.5)
+        h = hand_at(0.4, 0.5, tip=(0.4, 0.5))
         self.assertGreater(abs(hand_target_px(h, SCREEN, 2.0)[0] - SCREEN[0] / 2), abs(hand_target_px(h, SCREEN, 1.0)[0] - SCREEN[0] / 2))
 
     def test_pointing_hand_is_the_closest_one(self):
@@ -103,6 +106,11 @@ class TrackerModesTest(unittest.TestCase):
 
     def select(self, feat=None, closed=False, hands=()):
         return self.tracker._select_target(self.feat if feat is None else feat, closed, list(hands), IMG)
+
+    def close_hands(self, hands, frames=6):
+        """Show scrolling hands for a few frames so the tracker's per-hand scroll state notices them."""
+        for i in range(frames):
+            self.tracker._scroll.update(i / 30, hands, IMG)
 
     def test_eye_mode_uses_only_the_gaze_model_never_the_head_offset(self):
         self.cfg.head_mode = "eye"
@@ -137,33 +145,55 @@ class TrackerModesTest(unittest.TestCase):
         self.cfg.head_mode = "head"
         self.assertEqual(self.select(closed=True)[1:], ("head", False))
 
-    def test_hand_mode_points_with_the_palm_and_falls_back_without_a_hand(self):
+    def test_hand_mode_points_with_the_index_fingertip_and_falls_back_without_a_hand(self):
         self.cfg.hand_mode = "hand"
-        hand = hand_at(0.4, 0.6)
+        hand = hand_at(0.4, 0.6, tip=(0.4, 0.5))
         target, source, hold = self.select(hands=[hand])
         np.testing.assert_allclose(target, hand_target_px(hand, self.tracker.model.screen, self.cfg.hand_gain))
         self.assertEqual((source, hold), ("hand", False))
         self.assertEqual(self.select(hands=[])[1], "eye")                    # no hand: the head mode takes over
 
+    def test_a_scrolling_hand_freezes_the_cursor_instead_of_pointing(self):
+        self.cfg.hand_mode = "hand"
+        scrolling = hand_at(0.4, 0.6, scroll=True)
+        self.close_hands([scrolling])
+        self.assertEqual(self.select(hands=[scrolling]), (None, "hand", True))
+        self.cfg.hand_scroll = False                                          # scrolling switched off: pointing again
+        self.assertEqual(self.select(hands=[scrolling])[1], "hand")
+
     def test_the_hand_keeps_moving_the_cursor_while_pinching_but_not_while_scrolling(self):
         self.cfg.hand_mode = "hand"
         hand = hand_at(0.4, 0.6)
-        self.assertEqual(self.select(hands=[hand])[1:], ("hand", False))              # visible: follows the hand
-        self.tracker._pinch._cand, self.tracker._pinch._cand_n = "left", 1            # fingers closing for a pinch
-        self.assertEqual(self.select(hands=[hand])[1:], ("hand", False))
-        self.tracker._pinch._cand, self.tracker._pinch._cand_n = None, 0
+        self.assertEqual(self.select(hands=[hand])[1:], ("hand", False))              # visible: follows the fingertip
         self.tracker._pinch.active = "left"                                            # pinch held: still follows (drag)
         self.assertEqual(self.select(hands=[hand])[1:], ("hand", False))
         self.tracker._pinch.active = None
-        self.tracker._scroll.active = True                                             # closed hand: scrolling, frozen
-        self.assertEqual(self.select(hands=[hand]), (None, "hand", True))
+        scrolling = hand_at(0.4, 0.6, scroll=True)
+        self.close_hands([scrolling])                                                       # thumb on the ring finger: scrolling, frozen
+        self.assertEqual(self.select(hands=[scrolling]), (None, "hand", True))
 
-    def test_a_closed_hand_freezes_the_cursor_instead_of_pointing(self):
+    def test_both_hands_count_one_points_while_the_other_scrolls(self):
         self.cfg.hand_mode = "hand"
-        self.tracker._scroll.active = True
-        self.assertEqual(self.select(hands=[hand_at(0.4, 0.6)]), (None, "hand", True))
-        self.cfg.hand_scroll = False                                          # scrolling switched off: pointing again
-        self.assertEqual(self.select(hands=[hand_at(0.4, 0.6)])[1], "hand")
+        pointer, scrolling = hand_at(0.3, 0.6, tip=(0.3, 0.45)), hand_at(0.7, 0.6, scroll=True)
+        self.close_hands([pointer, scrolling])
+        target, source, hold = self.select(hands=[pointer, scrolling])
+        np.testing.assert_allclose(target, hand_target_px(pointer, self.tracker.model.screen, self.cfg.hand_gain))
+        self.assertEqual((source, hold), ("hand", False))
+        self.close_hands([scrolling, pointer])                                            # same hands, other list order
+        target2, _, _ = self.select(hands=[scrolling, pointer])
+        np.testing.assert_allclose(target2, target)
+
+    def test_the_left_hand_works_exactly_like_the_right_one(self):
+        self.cfg.hand_mode = "hand"
+        for x in (0.25, 0.75):                                                       # either side of the frame
+            hand = hand_at(x, 0.6, tip=(x, 0.5))
+            target, source, _ = self.select(hands=[hand])
+            self.assertEqual(source, "hand")
+            np.testing.assert_allclose(target, hand_target_px(hand, self.tracker.model.screen, self.cfg.hand_gain))
+
+    def test_pinch_mode_never_moves_the_cursor_with_the_hand(self):
+        self.cfg.hand_mode = "pinch"
+        self.assertEqual(self.select(hands=[hand_at(0.4, 0.6)])[1], "eye")
 
     def test_off_mode_disables_eye_and_head_control_completely(self):
         self.cfg.head_mode = "off"
@@ -179,10 +209,6 @@ class TrackerModesTest(unittest.TestCase):
         hand = hand_at(0.4, 0.6)
         self.assertEqual(self.select(hands=[hand])[1:], ("hand", False))
         self.assertEqual(self.select(hands=[])[1:], ("off", False))            # no hand: nothing moves the cursor
-
-    def test_pinch_mode_never_moves_the_cursor_with_the_hand(self):
-        self.cfg.hand_mode = "pinch"
-        self.assertEqual(self.select(hands=[hand_at(0.4, 0.6)])[1], "eye")
 
     def test_mode_readiness_and_mouse_active(self):
         self.tracker.model.clear()
@@ -212,6 +238,68 @@ class TrackerModesTest(unittest.TestCase):
         self.assertIsNone(self.tracker._press_anchor(1.0))
 
 
+class HandRolesTest(unittest.TestCase):
+    """Both hands count: each has its own id and scroll state."""
+
+    def setUp(self):
+        self.cfg = Config()
+        self.roles = HandRoles(self.cfg)
+
+    def feed(self, hands, frames=8, t0=0.0):
+        out = (0, 0)
+        for i in range(frames):
+            out = self.roles.update(t0 + i / 30, hands, IMG)
+        return out
+
+    def test_one_hand_scrolls_while_the_other_points(self):
+        idle, scrolling = hand_at(0.3, 0.6), hand_at(0.7, 0.6, scroll=True)
+        self.feed([idle, scrolling])
+        self.assertTrue(self.roles.scrolling(1))
+        self.assertFalse(self.roles.scrolling(0))
+        self.assertIs(self.roles.pointing([idle, scrolling]), idle)
+        self.assertTrue(self.roles.active)
+
+    def test_ids_follow_the_hands_when_the_list_order_swaps(self):
+        idle, scrolling = hand_at(0.3, 0.6), hand_at(0.7, 0.6, scroll=True)
+        self.feed([idle, scrolling])
+        for i in range(3):
+            self.roles.update(1.0 + i / 30, [scrolling, idle], IMG)                 # same hands, other order
+        self.assertTrue(self.roles.scrolling(0))
+        self.assertFalse(self.roles.scrolling(1))
+
+    def test_two_scrolling_hands_leave_nothing_to_point_with(self):
+        a, b = hand_at(0.3, 0.6, scroll=True), hand_at(0.7, 0.6, scroll=True)
+        self.feed([a, b])
+        self.assertIsNone(self.roles.pointing([a, b]))
+
+    def test_the_pointing_hand_is_sticky(self):
+        a, b = hand_at(0.3, 0.6), hand_at(0.7, 0.6)
+        b.pts[0, 1] += 0.2                                                     # b looks bigger (closer)
+        self.feed([a, b])
+        first = self.roles.pointing([a, b])
+        self.assertIs(first, b)
+        a.pts[0, 1] += 0.5                                                     # now a is bigger, but b already points
+        self.feed([a, b], t0=1.0)
+        self.assertIs(self.roles.pointing([a, b]), b)
+
+    def test_the_wheel_comes_from_the_scrolling_hand_while_the_other_hand_is_idle(self):
+        idle = hand_at(0.3, 0.6)
+        total = 0
+        positions = [(0.7, 0.3)] * 6 + [(0.7, 0.3 + 0.02 * i) for i in range(1, 25)]      # the hand moves down
+        for i, (x, y) in enumerate(positions):
+            dv, _ = self.roles.update(i / 30, [idle, hand_at(x, y, scroll=True)], IMG)
+            total += dv
+        self.assertLess(total, -200)                                            # scrolled down
+        self.assertFalse(self.roles.scrolling(0))
+
+    def test_a_vanished_hand_is_forgotten(self):
+        scrolling = hand_at(0.5, 0.5, scroll=True)
+        self.feed([scrolling])
+        self.roles.update(0.5, [], IMG)
+        self.roles.update(2.0, [], IMG)
+        self.assertFalse(self.roles.active)
+
+
 class ConfigModesTest(unittest.TestCase):
     def test_defaults_and_names(self):
         cfg = Config()
@@ -229,17 +317,17 @@ class ConfigModesTest(unittest.TestCase):
         self.assertEqual((cfg.head_mode, cfg.hand_mode, cfg.head_gain), ("eye", "pinch", 1.7))
 
 
-def drive(controller, positions, curl=0.8, fps=30.0):
-    """Feed a sequence of palm positions (normalised) as a closed hand; returns total (vertical, horizontal) wheel units."""
+def drive(controller, positions, scroll=True, fps=30.0):
+    """Feed a sequence of palm positions (normalised) with the thumb on the ring finger; returns total (vertical, horizontal) wheel units."""
     v = h = 0
     for i, (x, y) in enumerate(positions):
-        dv, dh = controller.update(i / fps, hand_at(x, y, curl), IMG)
+        dv, dh = controller.update(i / fps, hand_at(x, y, scroll), IMG)
         v, h = v + dv, h + dh
     return v, h
 
 
 def swipe(start, velocity, seconds=1.0, fps=30.0, settle=6):
-    """`settle` still frames (enter the fist state), then a constant-velocity motion in frame-height units/s."""
+    """`settle` still frames (enter the scroll state), then a constant-velocity motion in frame-height units/s."""
     n = int(seconds * fps)
     still = [start] * settle
     move = [(start[0] + velocity[0] * i / fps * (IMG[1] / IMG[0]), start[1] + velocity[1] * i / fps) for i in range(1, n + 1)]
@@ -263,17 +351,17 @@ class ScrollControllerTest(unittest.TestCase):
         self.cfg = Config()
         self.sc = ScrollController(self.cfg)
 
-    def test_a_still_fist_enters_scroll_mode_without_scrolling(self):
+    def test_thumb_on_ring_finger_enters_scroll_mode_without_scrolling(self):
         v, h = drive(self.sc, [(0.5, 0.5)] * 10)
         self.assertTrue(self.sc.active)
         self.assertEqual((v, h), (0, 0))
 
-    def test_open_hand_never_scrolls_however_fast_it_moves(self):
-        v, h = drive(self.sc, swipe((0.5, 0.3), (0.0, 1.2)), curl=1.9)
+    def test_a_hand_without_the_touch_never_scrolls_however_fast_it_moves(self):
+        v, h = drive(self.sc, swipe((0.5, 0.3), (0.0, 1.2)), scroll=False)
         self.assertFalse(self.sc.active)
         self.assertEqual((v, h), (0, 0))
 
-    def test_fist_moving_down_scrolls_down_and_moving_up_scrolls_up(self):
+    def test_moving_down_scrolls_down_and_moving_up_scrolls_up(self):
         down, _ = drive(ScrollController(self.cfg), swipe((0.5, 0.2), (0.0, 0.6)))
         up, _ = drive(ScrollController(self.cfg), swipe((0.5, 0.8), (0.0, -0.6)))
         self.assertLess(down, -300)                 # wheel deltas: negative = down (about 5.6 notches in a second)
@@ -310,11 +398,11 @@ class ScrollControllerTest(unittest.TestCase):
         v, h = drive(self.sc, swipe((0.5, 0.5), (0.0, 0.04), seconds=2.0))
         self.assertEqual((v, h), (0, 0))
 
-    def test_opening_the_hand_ends_scroll_mode(self):
+    def test_separating_the_thumb_from_the_ring_finger_ends_scroll_mode(self):
         drive(self.sc, [(0.5, 0.5)] * 8)
         self.assertTrue(self.sc.active)
         for i in range(4):
-            self.sc.update(1.0 + i / 30, hand_at(0.5, 0.5, curl=1.9), IMG)
+            self.sc.update(1.0 + i / 30, hand_at(0.5, 0.5), IMG)
         self.assertFalse(self.sc.active)
 
     def test_losing_the_hand_ends_scroll_mode_after_a_moment(self):
@@ -327,8 +415,8 @@ class ScrollControllerTest(unittest.TestCase):
 
     def test_a_hand_that_reappears_elsewhere_after_a_dropout_does_not_cause_a_scroll_burst(self):
         drive(self.sc, [(0.5, 0.2)] * 8)
-        before = self.sc.update(0.5, hand_at(0.5, 0.2, 0.8), IMG)
-        jump = self.sc.update(0.5 + 0.4, hand_at(0.5, 0.8, 0.8), IMG)              # 0.4 s later, far away
+        before = self.sc.update(0.5, hand_at(0.5, 0.2, True), IMG)
+        jump = self.sc.update(0.5 + 0.4, hand_at(0.5, 0.8, True), IMG)              # 0.4 s later, far away
         self.assertEqual((before, jump), ((0, 0), (0, 0)))
         self.assertTrue(self.sc.active)
 

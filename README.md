@@ -84,26 +84,27 @@ Dois menus no painel escolhem **o que move o mouse**. O modo é salvo e vale na 
 | **Cabeça** | Olho *(padrão)* | O cursor segue o olhar. A pose da cabeça continua entrando no modelo para **compensar** o erro, mas mexer a cabeça **não move** o mouse. Precisa de calibração. |
 | | Cabeça + olho | O olhar posiciona o cursor e virar a cabeça o desloca também (cabeça = movimento grosso, olho = ajuste fino). Precisa de calibração. |
 | | Cabeça | O cursor segue para onde o nariz aponta, relativo a uma pose neutra. Não precisa de calibração. |
-| | Desativado | Olho e cabeça **não movem** o mouse. Os gestos da mão continuam: com a mão em *Pinça* você usa o mouse físico e clica/rola com a mão; com *Mão relaxada move o cursor*, a mão também move. Não precisa de calibração. |
-| **Mão** | Pinça (clique) *(padrão)* | A mão só clica: polegar+indicador = esquerdo, polegar+médio = direito, segurar = arrastar. |
-| | Mão relaxada move o cursor + pinça | Basta a **mão estar visível**: ela move o cursor sem exigir nenhuma pose (não precisa apontar o dedo). A pinça clica **e a mão continua movendo o cursor durante a pinça** (é assim que se arrasta; o cursor segue o movimento *relativo* da mão a partir do clique, então o clique não vira arrasto sem querer). O **punho fechado** rola a página e para o cursor. Sem mão, vale o modo de cabeça. |
+| | Desativado | Olho e cabeça **não movem** o mouse. Os gestos da mão continuam: com a mão em *Pinça* você usa o mouse físico e clica/rola com a mão; com *Ponta do indicador move o cursor*, o dedo também move. Não precisa de calibração. |
+| **Mão** | Pinça (clique) *(padrão)* | A mão só clica e rola: polegar+indicador = esquerdo, polegar+médio = direito, segurar = arrastar, polegar+anelar = rolagem. Vale **qualquer uma das duas mãos**. |
+| | Ponta do indicador move o cursor + pinça | Quem move o cursor é **só a ponta do dedo indicador** (a bola do indicador), não a mão inteira; basta a mão estar visível, sem pose obrigatória. A pinça clica **e a ponta continua movendo o cursor durante a pinça** (é assim que se arrasta; o cursor segue o movimento *relativo* a partir do clique, então o clique não vira arrasto sem querer). **Polegar+anelar** rola a página e para o cursor. As duas mãos valem: uma pode apontar enquanto a outra rola. Sem mão, vale o modo de cabeça. |
 
 - **Recentralizar cabeça** (`Ctrl+Alt+R`): define a pose atual como o centro da tela nos modos com cabeça. Isso também acontece ao ligar o mouse e ao trocar de modo.
 - **Sensibilidade do movimento** (sliders 0,3–3,0): *Cabeça*, *Mão* e *Rolagem*. O modo Olho não tem sensibilidade: sua precisão vem da calibração.
 - Atalhos: `Ctrl+Alt+H` alterna o modo da cabeça, `Ctrl+Alt+M` o da mão.
 
-## Rolagem com a mão fechada
+## Rolagem com polegar+anelar
 
-Com a **mão fechada** (punho), mover a mão rola a página como dois dedos no touchpad: quanto mais rápido o movimento, mais intensa a rolagem
-(curva superlinear; a sensibilidade é o slider *Rolagem*). Vertical e horizontal, com bloqueio de eixo (só a direção dominante rola).
-Mão para baixo rola para baixo; *Inverter a direção da rolagem (natural)* troca isso. Durante a rolagem o cursor fica parado (no modo "Mão move o cursor")
-e a bolha fica roxa. Pode ser desligada em *Rolar com a mão fechada*. O punho é reconhecido quando os quatro dedos estão dobrados
-(medido nos dados: 0% de falsos com a mão aberta ou em pinça).
+Encostar a **bola do polegar na bola do dedo anelar** liga o modo de rolagem; enquanto elas se tocam, mover a mão rola a página como dois dedos no
+touchpad: quanto mais rápido o movimento, mais intensa a rolagem (curva superlinear; a sensibilidade é o slider *Rolagem*). Vertical e horizontal,
+com bloqueio de eixo (só a direção dominante rola). Mão para baixo rola para baixo; *Inverter a direção da rolagem (natural)* troca isso.
+Separar os dedos encerra a rolagem. Durante a rolagem o cursor fica parado (no modo "Ponta do indicador move o cursor") e a bolha fica roxa.
+Pode ser desligada em *Rolar com polegar+anelar*. Uma mão em rolagem não clica; a outra mão continua livre. Se o polegar estiver entre o
+médio/indicador e o anelar, vale o dedo **mais próximo**. Vale qualquer uma das duas mãos.
 
 ## Visão da câmera
 
 O botão **Ver câmera (visão computacional)** abre uma janela ao vivo com o que o programa enxerga: rosto (caixa e íris), **esqueleto da mão**, estado
-(*mão aberta*, *PINÇA esquerdo/direito*, *PUNHO — rolagem* com a velocidade), a distância das pontas dos dedos e a origem do cursor.
+(*relaxada*, *PINÇA esquerda/direita*, *ROLAGEM* com a velocidade, **um estado por mão**), as **bolas** nas pontas dos dedos (polegar, indicador, médio, anelar; ficam preenchidas quando se tocam: verde = clique esquerdo, laranja = direito, roxo = rolagem), a distância das pontas e a origem do cursor.
 Use-a para ajustar a posição da mão: com a mão fora do quadro nada funciona (foi a causa de testes ruins). É a mesma janela usada nos testes ao vivo.
 
 ## Dicas para acertar mais
@@ -112,16 +113,17 @@ Use-a para ajustar a posição da mão: com a mão fora do quadro nada funciona 
 - Com pouca luz a webcam alonga a exposição e cai para ~10–15 fps. Acenda uma luz ou reduza a *Exposição* na aba Câmera e compense com Ganho/Gama/CLAHE.
 - Câmera na altura dos olhos, ~50 cm da tela. Se mudar de posição, refaça (ou refine) a calibração.
 - Precisão realista de webcam: erro típico de 2–5% da tela. Não substitui um rastreador infravermelho.
-- A câmera precisa **enxergar sua mão** para a pinça funcionar. O clique é definido pela **distância entre as pontas dos dedos**
-  (ponta do polegar × ponta do indicador/médio, em unidades do tamanho da mão: 0 = encostadas, 1 = bem separadas; combina a medida na
-  imagem e a 3D do MediaPipe). A tela inicial da calibração mostra o valor ao vivo de cada dedo.
-- Se a pinça não disparar ou disparar sem querer, aperte **`P`** na tela inicial da calibração. O assistente (15 s) mede a sua mão aberta
-  e em pinça, para indicador e médio, e define: o limiar de disparo de cada dedo (logo acima do nível de contato *da sua* pinça; o clique é **solto no primeiro quadro em que os dedos se afastam**, para a volta da mão não computar pinça) e a
-  **guarda de punho**, que impede iniciar clique quando os outros três dedos estão dobrados (punho ou mão relaxada, onde o polegar
-  fica perto das pontas sem intenção de clicar). Faça a pinça com os outros dedos **esticados**; se você pinça com eles dobrados,
-  o assistente desliga a guarda. "Zerar calibração da pinça" está em *Configurações…*.
-- Limite conhecido: se o polegar passar rapidamente por cima da ponta do indicador (sem tocar), a câmera única não distingue isso de
-  uma pinça muito rápida e pode gerar um clique breve. Em gestos livres intencionalmente difíceis isso ocorreu ~1 vez a cada 6 s.
+- A câmera precisa **enxergar sua mão** para a pinça funcionar. **O único critério de pinça é: as bolas dos dois dedos se tocam.** Cada ponta
+  de dedo (polegar, indicador, médio, anelar) é uma bola desenhada na *Visão da câmera*, com raio = *Bola da pinça* (% do tamanho da mão, padrão 9,5%).
+  Duas bolas se tocam quando a distância entre as pontas, medida **na imagem**, é no máximo dois raios. Tocando = pinça, não tocando = sem pinça:
+  sem 3D, sem histerese, sem espera e sem "guarda de punho"; o clique é solto no primeiro quadro em que as bolas se separam.
+- **Tamanho da bola**: digite no painel principal (*Bola da pinça*, 3–30 % da mão) ou rode o assistente **`P`** na tela inicial da calibração
+  (15 s: mede sua mão aberta e em pinça e escolhe a bola que encosta quando *os seus* dedos encostam). Bola maior = dispara com os dedos mais afastados;
+  menor = exige encostar de verdade. "Bola da pinça: padrão" está em *Configurações…*.
+- Como a única regra é o toque das bolas, um punho fechado também pode aproximar o polegar do indicador. A única arbitragem: uma mão em **rolagem**
+  (polegar+anelar) não clica, e o dedo mais próximo do polegar decide entre clique e rolagem.
+- Limite conhecido: se o polegar passar rapidamente por cima da ponta do indicador (sem tocar de verdade na profundidade), a câmera única não distingue
+  isso de uma pinça muito rápida e pode gerar um clique breve.
 - Alterações na aba *Câmera* **persistem no driver**, afetam outros apps e são reaplicadas toda vez que o programa abre. Se a imagem
   ficar escura ou estranha, abra *Imagem e contraste* e aperte **`R` (Restaurar tudo)**: volta o driver ao estado original e zera os ajustes de software.
   O programa avisa quando a imagem está quase preta.
@@ -129,8 +131,8 @@ Use-a para ajustar a posição da mão: com a mão fora do quadro nada funciona 
 ## Configuração
 
 `data/config.json` (gerado automaticamente; quase tudo também está em *Configurações…*). Principais chaves:
-`smoothing_min_cutoff` / `smoothing_beta` (suavização), `deadzone_px`, `bubble_size`, `pinch_on_ratio` / `pinch_off_ratio`
-(sensibilidade da pinça), `drag_hold_ms`, `calibration_points`, `calibration_head`, `img_*` (imagem), `camera_props`, `camera_fourcc`.
+`smoothing_min_cutoff` / `smoothing_beta` (suavização), `deadzone_px`, `bubble_size`, `pinch_ball_size`
+(tamanho da bola da pinça, fração do tamanho da mão), `drag_hold_ms`, `calibration_points`, `calibration_head`, `img_*` (imagem), `camera_props`, `camera_fourcc`.
 
 ## Como funciona
 

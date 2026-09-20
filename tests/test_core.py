@@ -17,7 +17,7 @@ from eyemouse.filters import MedianFilter, OneEuroFilter
 from eyemouse import imaging
 from eyemouse.features import eye_region_box
 from eyemouse.gaze_model import GazeModel, reject_outliers
-from eyemouse.hands import PinchDetector, derive_guard_curl, derive_thresholds, finger_curls, pinch_metrics
+from eyemouse.hands import PinchDetector, derive_ball_size, pinch_metrics, scroll_touch, touch_metrics
 from eyemouse.landmarks import HandData
 
 SCREEN = (1366, 768)
@@ -190,196 +190,149 @@ class FilterTest(unittest.TestCase):
 IMG = (100, 100)
 
 
-def hand_with_pinch(index_gap, middle_gap, index_2d=None, middle_2d=None):
-    """A hand as MediaPipe would report it.
+def hand_touching(index_r, middle_r, ring_r=0.9, at=(0.5, 0.4), palm=(0.5, 0.6)):
+    """A hand as MediaPipe reports it (image landmarks only: the pinch criterion is 2D).
 
-    3D (world, metres, palm = 0.1 m): fingertip gaps `index_gap` / `middle_gap`.
-    2D (image, palm = 0.2 of a square image): gaps expressed in palm lengths; by default the same as the 3D ratio,
-    pass different values to simulate a depth estimate that disagrees with what the image shows.
+    The thumb tip is at `at`; the index / middle / ring tips are that many HAND SIZES away from it (the hand size is
+    0.2 of the image here). `palm` shifts the whole hand vertically (to place two hands in one frame).
     """
-    w = np.zeros((21, 3))
-    w[0], w[9] = (0, 0, 0), (0, 0.1, 0)
-    w[4] = (0.05, 0.05, 0)
-    w[8] = (0.05 + index_gap, 0.05, 0)
-    w[12] = (0.05, 0.05 + middle_gap, 0)
-    w[16], w[20] = (0.02, 0.19, 0), (0.05, 0.17, 0)     # ring and pinky extended, like a normal open/pinching hand
-    r_i = index_gap / 0.1 if index_2d is None else index_2d
-    r_m = middle_gap / 0.1 if middle_2d is None else middle_2d
+    dx, dy = at[0] - 0.5, palm[1] - 0.6
     pts = np.zeros((21, 3))
-    pts[0, :2], pts[9, :2] = (0.5, 0.8), (0.5, 0.6)          # palm length 0.2
-    pts[5, :2], pts[17, :2] = (0.45, 0.62), (0.55, 0.62)     # narrower than the palm, so the palm sets the scale
+    pts[0, :2], pts[9, :2] = (0.5, 0.8), (0.5, 0.6)              # wrist and middle knuckle: 0.2 apart = one hand size
+    pts[5, :2], pts[17, :2] = (0.45, 0.62), (0.55, 0.62)         # narrower than the palm, so the palm sets the scale
     pts[4, :2] = (0.5, 0.4)
-    pts[8, :2] = (0.5 + 0.2 * r_i, 0.4)
-    pts[12, :2] = (0.5, 0.4 - 0.2 * r_m)
-    return HandData(pts, w)
+    pts[8, :2] = (0.5 + 0.2 * index_r, 0.4)
+    pts[12, :2] = (0.5, 0.4 - 0.2 * middle_r)
+    pts[16, :2] = (0.5 - 0.2 * ring_r, 0.4)
+    pts[:, 0] += dx
+    pts[:, 1] += dy
+    return HandData(pts, np.zeros((21, 3)))                       # no depth at all: the world coordinates must not matter
 
 
 class PinchTest(unittest.TestCase):
     def run_seq(self, det, frames):
-        return [det.update(i / 30, [hand_with_pinch(*f)] if f else [], IMG) for i, f in enumerate(frames)]
+        return [det.update(i / 30, [hand_touching(*f)] if f else [], IMG) for i, f in enumerate(frames)]
 
-    def test_metrics_agree_when_2d_and_3d_agree(self):
-        mi, mm = pinch_metrics(hand_with_pinch(0.02, 0.08), *IMG)
-        self.assertAlmostEqual(mi, 0.2, places=2)
+    def test_distances_are_measured_in_hand_sizes(self):
+        mi, mm = pinch_metrics(hand_touching(0.1, 0.8), *IMG)
+        self.assertAlmostEqual(mi, 0.1, places=2)
         self.assertAlmostEqual(mm, 0.8, places=2)
+        self.assertAlmostEqual(touch_metrics(hand_touching(0.1, 0.8, 0.5), *IMG)[2], 0.5, places=2)
 
-    def test_tips_touching_in_the_image_count_even_if_3d_depth_reads_far(self):
-        # The reported failure: fingertips overlap on screen but MediaPipe's 3D says 0.51 (index) / 1.21 (middle).
-        hand = hand_with_pinch(0.051, 0.121, index_2d=0.05, middle_2d=1.2)
-        mi, mm = pinch_metrics(hand, *IMG)
-        self.assertLess(mi, 0.10)
-        self.assertGreater(mm, 1.1)                     # the untouched middle finger stays "open"
-        det = PinchDetector(Config())
-        out = [det.update(i / 30, [hand], IMG) for i in range(4)]
-        self.assertEqual(out[-1], "left")
+    def test_the_only_criterion_is_that_the_two_balls_touch(self):
+        cfg = Config()
+        self.assertAlmostEqual(cfg.pinch_thresholds()[0], 2 * cfg.pinch_ball_size)     # two radii: the balls touch
+        touching, apart = 2 * cfg.pinch_ball_size - 0.01, 2 * cfg.pinch_ball_size + 0.01
+        self.assertEqual(self.run_seq(PinchDetector(cfg), [(touching, 0.9)])[-1], "left")
+        self.assertIsNone(self.run_seq(PinchDetector(cfg), [(apart, 0.9)])[-1])
 
-    def test_2d_overlap_is_ignored_when_3d_says_the_fingers_are_far_apart(self):
-        # A finger passing in front of the thumb: overlaps in the image, but is clearly far away in depth.
-        mi, _ = pinch_metrics(hand_with_pinch(0.13, 0.13, index_2d=0.02, middle_2d=0.02), *IMG)
-        self.assertGreater(mi, 1.1)
-        det = PinchDetector(Config())
-        out = [det.update(i / 30, [hand_with_pinch(0.13, 0.13, 0.02, 0.02)], IMG) for i in range(5)]
-        self.assertEqual(out, [None] * 5)
+    def test_a_bigger_ball_makes_fingers_further_apart_count(self):
+        cfg = Config()
+        gap = 2 * cfg.pinch_ball_size + 0.06
+        self.assertIsNone(self.run_seq(PinchDetector(cfg), [(gap, 0.9)])[-1])
+        cfg.pinch_ball_size += 0.05
+        self.assertEqual(self.run_seq(PinchDetector(cfg), [(gap, 0.9)])[-1], "left")
+
+    def test_thumb_and_middle_balls_are_the_right_button(self):
+        self.assertEqual(self.run_seq(PinchDetector(Config()), [(0.9, 0.1)])[-1], "right")
 
     def test_open_hand_never_clicks(self):
-        det = PinchDetector(Config())
-        self.assertEqual(self.run_seq(det, [(0.09, 0.09)] * 10), [None] * 10)
+        self.assertEqual(self.run_seq(PinchDetector(Config()), [(0.9, 0.9)] * 10), [None] * 10)
 
-    def test_left_then_right_with_hysteresis(self):
-        det = PinchDetector(Config())
-        seq = [(0.08, 0.08)] * 3 + [(0.02, 0.08)] * 4 + [(0.035, 0.08)] * 3 + [(0.08, 0.08)] * 4 \
-              + [(0.08, 0.02)] * 4 + [(0.08, 0.08)] * 4
-        out = self.run_seq(det, seq)
-        self.assertEqual(out[:3], [None] * 3)
-        self.assertIn("left", out[3:7])
-        self.assertEqual(out[9], "left")          # between on/off thresholds: still pressed
-        self.assertIsNone(out[-9])                # released after opening
-        self.assertIn("right", out[14:18])
-        self.assertIsNone(out[-1])
+    def test_the_click_follows_the_balls_frame_by_frame_with_no_lag(self):
+        out = self.run_seq(PinchDetector(Config()), [(0.9, 0.9), (0.1, 0.9), (0.1, 0.9), (0.25, 0.9), (0.9, 0.9), (0.1, 0.9)])
+        self.assertEqual(out, [None, "left", "left", None, None, "left"])       # pressed exactly while the balls touch
 
-    def test_single_frame_glitch_is_ignored(self):
-        det = PinchDetector(Config())
-        out = self.run_seq(det, [(0.08, 0.08)] * 3 + [(0.01, 0.08)] + [(0.08, 0.08)] * 3)
-        self.assertNotIn("left", out)
-
-    def test_hand_lost_releases_button(self):
-        det = PinchDetector(Config())
-        out = self.run_seq(det, [(0.02, 0.08)] * 5 + [None] * 15)
+    def test_hand_lost_releases_the_button_after_a_moment(self):
+        out = self.run_seq(PinchDetector(Config()), [(0.1, 0.9)] * 5 + [None] * 15)
         self.assertEqual(out[4], "left")
         self.assertIsNone(out[-1])
 
-    def test_per_finger_calibrated_thresholds_override_the_global_ones(self):
-        cfg = Config()
-        loose = [(0.04, 0.09)] * 4                      # index at 0.4: above the default 0.30 threshold
-        self.assertNotIn("left", self.run_seq(PinchDetector(cfg), loose))
-        cfg.pinch_on_index, cfg.pinch_off_index = 0.5, 0.7
-        self.assertEqual(self.run_seq(PinchDetector(cfg), loose)[-1], "left")
-        self.assertEqual(cfg.pinch_thresholds("middle"), (cfg.pinch_on_ratio, cfg.pinch_off_ratio))   # untouched finger
+    def test_a_dropout_of_a_frame_or_two_does_not_release(self):
+        out = self.run_seq(PinchDetector(Config()), [(0.1, 0.9)] * 3 + [None] * 2 + [(0.1, 0.9)] * 2)
+        self.assertEqual(out, ["left"] * 7)
 
-    def test_the_click_is_released_as_soon_as_the_fingers_separate(self):
+    def test_confirm_and_release_frames_are_optional_extras(self):
+        cfg = Config()
+        cfg.pinch_confirm_frames, cfg.pinch_release_frames = 3, 2
+        out = self.run_seq(PinchDetector(cfg), [(0.1, 0.9)] * 4 + [(0.5, 0.9)] + [(0.1, 0.9)] + [(0.5, 0.9)] * 3)
+        self.assertEqual(out[:2], [None, None])
+        self.assertEqual(out[2], "left")
+        self.assertEqual(out[4], "left")                  # one frame apart is not enough to release
+        self.assertIsNone(out[-1])
+
+    def test_a_thumb_closest_to_the_ring_finger_does_not_click(self):
+        # thumb between index (0.15) and ring (0.10): the ring finger is the closest, that is the scroll gesture
+        self.assertEqual(self.run_seq(PinchDetector(Config()), [(0.15, 0.9, 0.10)] * 4), [None] * 4)
+        self.assertEqual(self.run_seq(PinchDetector(Config()), [(0.10, 0.9, 0.15)] * 4)[-1], "left")
+
+
+class TwoHandsTest(unittest.TestCase):
+    """Both hands count, not only the right one."""
+
+    def update(self, det, hands, t=0.0):
+        return det.update(t, hands, IMG)
+
+    def test_either_hand_can_click(self):
+        left_hand = hand_touching(0.1, 0.9, at=(0.25, 0.4))
+        right_hand = hand_touching(0.1, 0.9, at=(0.75, 0.4))
+        idle = lambda x: hand_touching(0.9, 0.9, at=(x, 0.4))
+        for pinching, other, index in ((left_hand, idle(0.75), 0), (right_hand, idle(0.25), 1)):
+            det = PinchDetector(Config())
+            hands = [pinching, other] if index == 0 else [other, pinching]
+            self.assertEqual(self.update(det, hands), "left")
+            self.assertEqual(det.hand_index, index)
+
+    def test_a_relaxed_second_hand_neither_holds_nor_cuts_the_click(self):
         det = PinchDetector(Config())
-        out = self.run_seq(det, [(0.02, 0.09)] * 5 + [(0.06, 0.09)] + [(0.09, 0.09)] * 2)          # ratios 0.2, then 0.6, then 0.9
-        self.assertEqual(out[4], "left")
-        self.assertIsNone(out[5])                        # 0.6 > the release threshold (0.45): released on the very first frame
-        self.assertEqual(out[6:], [None, None])
+        pinch, idle = hand_touching(0.1, 0.9, at=(0.25, 0.4)), hand_touching(0.9, 0.9, at=(0.75, 0.4))
+        self.assertEqual(self.update(det, [pinch, idle], 0.0), "left")
+        self.assertEqual(self.update(det, [idle, pinch], 0.03), "left")                # same hands, other order: still pressed
+        self.assertIsNone(self.update(det, [hand_touching(0.9, 0.9, at=(0.25, 0.4)), idle], 0.06))    # the pinching hand opened
 
-    def test_a_click_is_not_cut_by_jitter_inside_the_hysteresis_band(self):
+    def test_a_hand_that_is_scrolling_cannot_click(self):
         det = PinchDetector(Config())
-        out = self.run_seq(det, [(0.02, 0.09)] * 4 + [(0.04, 0.09), (0.03, 0.09), (0.04, 0.09)] + [(0.02, 0.09)] * 3)   # 0.2 .. 0.4
-        self.assertEqual(out[3:], ["left"] * 7)          # never dropped: 0.4 stays under the release threshold
+        touching = hand_touching(0.1, 0.9, at=(0.25, 0.4))
+        self.assertIsNone(det.update(0.0, [touching], IMG, blocked=[True]))
+        self.assertEqual(det.update(0.03, [touching], IMG, blocked=[False]), "left")
 
-    def test_off_threshold_is_always_above_on(self):
-        cfg = Config()
-        cfg.pinch_on_index, cfg.pinch_off_index = 0.5, 0.4
-        on, off = cfg.pinch_thresholds("index")
-        self.assertGreater(off, on)
-
-
-def hand_pose(pinch="index", gap=0.01, others_curl=1.9):
-    """Thumb tip `gap` metres from the `pinch` fingertip, that finger extended, and the other three at `others_curl`."""
-    w = np.zeros((21, 3))
-    w[9] = (0, 0.1, 0)                                            # palm length 0.1 m
-    dirs = {"index": (-0.3, 1.0), "middle": (0.0, 1.0), "ring": (0.3, 1.0), "pinky": (0.6, 1.0)}
-    from eyemouse.hands import FINGER_TIPS
-    for name, i in FINGER_TIPS.items():
-        v = np.array(dirs[name]) / np.linalg.norm(dirs[name])
-        w[i, :2] = v * 0.1 * (1.9 if name == pinch else others_curl)
-    w[4] = w[FINGER_TIPS[pinch]] + (gap, 0, 0)
-    pts = np.zeros((21, 3))
-    pts[:, :2] = 0.5 + w[:, :2] * 2.0
-    pts[5, :2], pts[17, :2] = (0.45, 0.6), (0.55, 0.6)
-    return HandData(pts, w)
-
-
-class FistGuardTest(unittest.TestCase):
-    def press(self, hand, cfg=None, frames=6):
-        det = PinchDetector(cfg or Config())
-        return [det.update(i / 30, [hand], IMG) for i in range(frames)]
-
-    def test_curls_reflect_finger_extension(self):
-        extended = finger_curls(hand_pose(others_curl=1.9))
-        folded = finger_curls(hand_pose(others_curl=0.8))
-        self.assertGreater(extended["ring"], 1.8)
-        self.assertLess(folded["ring"], 0.9)
-
-    def test_thumb_touching_the_index_tip_clicks_when_the_other_fingers_are_extended(self):
-        self.assertEqual(self.press(hand_pose("index", 0.01, others_curl=1.9))[-1], "left")
-        self.assertEqual(self.press(hand_pose("middle", 0.01, others_curl=1.9))[-1], "right")
-
-    def test_the_same_contact_in_a_fist_or_relaxed_hand_does_not_click(self):
-        self.assertEqual(self.press(hand_pose("index", 0.01, others_curl=0.8)), [None] * 6)     # fist
-        self.assertEqual(self.press(hand_pose("middle", 0.01, others_curl=1.2)), [None] * 6)    # relaxed, semi-folded
-
-    def test_guard_can_be_turned_off_for_people_who_pinch_with_folded_fingers(self):
-        cfg = Config()
-        cfg.pinch_fist_guard = False
-        self.assertEqual(self.press(hand_pose("index", 0.01, others_curl=0.8), cfg)[-1], "left")
-
-    def test_curl_limit_is_configurable(self):
-        hand = hand_pose("index", 0.01, others_curl=1.4)
-        cfg = Config()
-        cfg.pinch_guard_curl = 1.3
-        self.assertEqual(self.press(hand, cfg)[-1], "left")
-        cfg.pinch_guard_curl = 1.5
-        self.assertEqual(self.press(hand, cfg)[-1], None)
-
-    def test_a_pinch_already_held_is_not_cut_when_the_other_fingers_fold(self):
+    def test_the_other_hand_can_still_click_while_one_scrolls(self):
         det = PinchDetector(Config())
-        out = [det.update(i / 30, [hand_pose("index", 0.01, 1.9)], IMG) for i in range(5)]
-        out += [det.update((5 + i) / 30, [hand_pose("index", 0.01, 0.8)], IMG) for i in range(5)]
-        self.assertEqual(out[4], "left")
-        self.assertEqual(out[-1], "left")
+        scrolling, pinch = hand_touching(0.9, 0.9, 0.1, at=(0.25, 0.4)), hand_touching(0.1, 0.9, at=(0.75, 0.4))
+        self.assertEqual(det.update(0.0, [scrolling, pinch], IMG, blocked=[True, False]), "left")
+        self.assertEqual(det.hand_index, 1)
 
 
-class DeriveGuardCurlTest(unittest.TestCase):
-    def test_limit_keeps_a_margin_below_the_users_own_pinches(self):
-        limit = derive_guard_curl([1.82, 1.9, 2.0, 1.85, 1.95] * 10)      # this user's other fingers stay extended
-        self.assertTrue(1.4 <= limit <= 1.6)
-        self.assertLess(limit, 1.82)
+class ScrollGestureTest(unittest.TestCase):
+    def test_thumb_and_ring_balls_touching_is_the_scroll_gesture(self):
+        cfg = Config()
+        on = cfg.pinch_thresholds()[0]
+        self.assertTrue(scroll_touch(hand_touching(0.9, 0.9, on - 0.01), cfg, IMG))
+        self.assertFalse(scroll_touch(hand_touching(0.9, 0.9, on + 0.01), cfg, IMG))
 
-    def test_guard_is_disabled_when_the_user_pinches_with_folded_fingers(self):
-        self.assertIsNone(derive_guard_curl([0.9, 1.0, 1.1, 1.0] * 10))
+    def test_starting_needs_the_ring_finger_to_be_the_closest_but_continuing_does_not(self):
+        cfg = Config()
+        hand = hand_touching(0.12, 0.9, 0.15)                    # ring touches too, but the index is closer
+        self.assertFalse(scroll_touch(hand, cfg, IMG, strict=True))
+        self.assertTrue(scroll_touch(hand, cfg, IMG, strict=False))
 
 
-class DeriveThresholdsTest(unittest.TestCase):
-    def test_thresholds_sit_just_above_the_contact_level_and_below_the_open_hand(self):
-        on, off = derive_thresholds(open_value=1.1, contact_value=0.13)     # the user's measured index pinch
-        self.assertGreater(on, 0.13 * 1.3)
-        self.assertLess(on, 0.30)                                            # NOT halfway to the open hand (that fired on gestures)
-        self.assertGreater(off, on)
-        self.assertLess(off, 0.5)                                            # released well before the fingers look open (was 0.72)
+class DeriveBallSizeTest(unittest.TestCase):
+    def test_balls_touch_when_the_users_fingertips_touch(self):
+        ball = derive_ball_size(open_value=1.1, contact_value=0.13)
+        self.assertGreaterEqual(2 * ball, 0.13)                            # the user's contact distance counts as touching
+        self.assertLess(2 * ball, 0.30)                                    # ...without being oversized
+        self.assertLess(2 * ball, 1.1 / 2)                                 # and far below the open hand
 
     def test_returns_none_when_open_and_pinched_are_not_separable(self):
-        self.assertIsNone(derive_thresholds(open_value=0.5, contact_value=0.42))
+        self.assertIsNone(derive_ball_size(open_value=0.5, contact_value=0.42))
 
-    def test_a_pinch_that_never_reaches_zero_still_gets_a_usable_threshold(self):
-        on, off = derive_thresholds(open_value=1.0, contact_value=0.5)   # e.g. a hand that pinches at 0.5
-        self.assertGreater(on, 0.5)                                  # ...so the default 0.30 would never fire
+    def test_a_pinch_that_never_reaches_zero_gets_a_bigger_ball(self):
+        self.assertGreater(2 * derive_ball_size(open_value=1.0, contact_value=0.5), 0.5)
 
-    def test_thresholds_are_clamped(self):
-        on, off = derive_thresholds(open_value=3.0, contact_value=0.0)
-        self.assertLessEqual(on, 0.6)
-        self.assertLessEqual(off, 0.95)
+    def test_the_size_is_clamped(self):
+        self.assertGreaterEqual(derive_ball_size(3.0, 0.0), 0.03)
+        self.assertLessEqual(derive_ball_size(3.0, 1.9), 0.30)
 
 
 class BlinkTest(unittest.TestCase):

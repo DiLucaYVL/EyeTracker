@@ -204,45 +204,41 @@ class ConfigTest(unittest.TestCase):
 
 
 class ConfigMigrationTest(unittest.TestCase):
+    def load(self, text):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "config.json"
+            path.write_text(text, encoding="utf-8")
+            return Config.load(path)
+
     def test_old_files_get_the_new_pinch_defaults_but_keep_deliberate_choices(self):
-        with tempfile.TemporaryDirectory() as d:
-            path = Path(d) / "config.json"
-            path.write_text('{"pinch_confirm_frames": 2, "pinch_on_ratio": 0.3, "pinch_off_ratio": 0.45, "bubble_size": 150, '
-                            '"camera_props": {"gain": 5}}', encoding="utf-8")
-            cfg = Config.load(path)
+        cfg = self.load('{"pinch_confirm_frames": 2, "pinch_release_frames": 3, "pinch_on_ratio": 0.3, "pinch_off_ratio": 0.45, '
+                        '"bubble_size": 150, "camera_props": {"gain": 5}}')
         default = Config()
-        self.assertEqual((cfg.pinch_confirm_frames, cfg.pinch_on_ratio, cfg.pinch_off_ratio),
-                         (default.pinch_confirm_frames, default.pinch_on_ratio, default.pinch_off_ratio))
-        self.assertEqual(cfg.bubble_size, 150)                         # the user's own choices survive
+        self.assertEqual((cfg.pinch_confirm_frames, cfg.pinch_release_frames), (default.pinch_confirm_frames, default.pinch_release_frames))
+        self.assertEqual(cfg.pinch_ball_size, default.pinch_ball_size)     # no calibration stored: the default ball
+        self.assertEqual(cfg.bubble_size, 150)                             # the user's own choices survive
         self.assertEqual(cfg.camera_props, {"gain": 5})
+        self.assertFalse(hasattr(cfg, "pinch_on_ratio"))                    # the old thresholds are gone
 
-    def test_pinch_thresholds_from_the_old_wizard_are_rederived_with_the_tighter_rule(self):
-        with tempfile.TemporaryDirectory() as d:
-            path = Path(d) / "config.json"
-            path.write_text('{"config_version": 2, "pinch_on_index": 0.362, "pinch_off_index": 0.723, '
-                            '"pinch_on_middle": 0.383, "pinch_off_middle": 0.766, "pinch_release_frames": 3}', encoding="utf-8")
-            cfg = Config.load(path)
-        for finger, old_on in (("index", 0.362), ("middle", 0.383)):
-            on, off = cfg.pinch_thresholds(finger)
-            self.assertLess(on, old_on)                                       # fires closer to the touch
-            self.assertLess(off, 0.55)                                        # ...and releases well before 0.72
-            self.assertGreaterEqual(off, on + 0.1)
-        self.assertEqual(cfg.pinch_release_frames, Config().pinch_release_frames)   # fast release replaces the stored 3
+    def test_a_calibrated_pinch_becomes_a_ball_size_that_still_fires_at_the_users_contact_level(self):
+        for version, on_index, on_middle in ((2, 0.362, 0.383), (3, 0.30, 0.32)):
+            cfg = self.load('{"config_version": %d, "pinch_on_index": %s, "pinch_on_middle": %s}' % (version, on_index, on_middle))
+            on, _ = cfg.pinch_thresholds()
+            self.assertGreater(on, 0.12)                                    # the two balls touch at the contact level...
+            self.assertLess(on, 0.35)                                       # ...and are not oversized
+            self.assertNotEqual(cfg.pinch_ball_size, Config().pinch_ball_size)
 
-    def test_uncalibrated_pinch_thresholds_stay_uncalibrated(self):
-        with tempfile.TemporaryDirectory() as d:
-            path = Path(d) / "config.json"
-            path.write_text('{"config_version": 2}', encoding="utf-8")
-            cfg = Config.load(path)
-        self.assertEqual((cfg.pinch_on_index, cfg.pinch_off_index), (0.0, 0.0))
+    def test_uncalibrated_files_keep_the_default_ball(self):
+        self.assertEqual(self.load('{"config_version": 2}').pinch_ball_size, Config().pinch_ball_size)
 
     def test_current_files_are_not_reset(self):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "config.json"
             cfg = Config()
-            cfg.pinch_confirm_frames = 5
+            cfg.pinch_confirm_frames, cfg.pinch_ball_size = 5, 0.12
             cfg.save(path)
-            self.assertEqual(Config.load(path).pinch_confirm_frames, 5)
+            loaded = Config.load(path)
+        self.assertEqual((loaded.pinch_confirm_frames, loaded.pinch_ball_size), (5, 0.12))
 
 
 class WindowsInputTest(unittest.TestCase):

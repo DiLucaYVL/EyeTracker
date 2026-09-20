@@ -14,7 +14,7 @@ import numpy as np
 from .config import CALIBRATION_PATH, Config
 from . import head3d, mouse
 from .gaze_model import GazeModel, reject_outliers
-from .hands import derive_guard_curl, derive_thresholds, other_fingers_curl, pinch_metrics
+from .hands import derive_ball_size
 
 BG, FG, DIM = "#0b0f14", "#e6edf3", "#8b949e"
 ACCENT, GOOD, WARN, BAD, ORANGE = "#2f81f7", "#3fb950", "#d29922", "#f85149", "#f0883e"
@@ -118,7 +118,7 @@ class CalibrationScreen:
         self.buf_vis: list[tuple[float, float]] = []
         self.note = ""
         self.pinch_step, self.pinch_t0 = 0, 0.0
-        self.pinch_buf: list[tuple[float, float, float, float]] = []
+        self.pinch_buf: list[tuple[float, float]] = []
         self.pinch_vals: dict[str, np.ndarray] = {}
         self.ref = np.array([0.0, 0.08, 0.0, 0.0, 0.0, -45.0])   # yaw, pitch, roll, tx, ty, tz of the user's start pose
         self.ref_frozen = False
@@ -296,22 +296,13 @@ class CalibrationScreen:
         rec = el - PINCH_PREP_S
         if hand_ok and st.t != self.last_frame_t:
             self.last_frame_t = st.t
-            self.pinch_buf.append(self._pinch_sample(st))
+            self.pinch_buf.append((float(st.ratios[0]), float(st.ratios[1])))
         self._text(W / 2, 470, "gravando…", 22, GOOD, bold=True)
         bx0, bx1, by = W / 2 - 250, W / 2 + 250, 530
         self.cv.create_rectangle(bx0, by - 8, bx1, by + 8, outline="#30363d")
         self.cv.create_rectangle(bx0, by - 8, bx0 + 500 * min(rec / PINCH_REC_S, 1.0), by + 8, fill=GOOD, outline="")
         if rec >= PINCH_REC_S:
             self._finish_pinch_step(key)
-
-    def _pinch_sample(self, st) -> tuple[float, float, float, float]:
-        """(index metric, middle metric, how extended the other fingers are for an index / a middle pinch)."""
-        hands, size = self.tracker.last_hands
-        curls = (9.9, 9.9)
-        if hands:
-            hand = min(hands, key=lambda h: min(pinch_metrics(h, *size)))
-            curls = (other_fingers_curl(hand, "index"), other_fingers_curl(hand, "middle"))
-        return float(st.ratios[0]), float(st.ratios[1]), float(curls[0]), float(curls[1])
 
     def _finish_pinch_step(self, key: str) -> None:
         if len(self.pinch_buf) < PINCH_MIN_FRAMES:
@@ -329,30 +320,24 @@ class CalibrationScreen:
         self._set_phase("intro")
 
     def _apply_pinch_calibration(self) -> None:
+        """Set the ball size from where this user's fingertips are when they touch (the balls then touch when they do)."""
         open_v, index_v, middle_v = (self.pinch_vals[k] for k in ("open", "index", "middle"))
-        parts, ok_all = [], True
+        parts, sizes = [], []
         for finger, col, pinched in (("index", 0, index_v), ("middle", 1, middle_v)):
-            # contact level = a low percentile: the recording also contains the finger closing in, not only the hold
+            # contact = a low percentile: the recording also contains the finger closing in, not only the hold
             o, p = float(np.median(open_v[:, col])), float(np.percentile(pinched[:, col], 40))
             name = "indicador" if finger == "index" else "médio"
-            th = derive_thresholds(o, p)
-            if th is None:
-                ok_all = False
-                parts.append(f"{name}: não separou (aberta {o:.2f}, pinça {p:.2f})")
-                continue
-            setattr(self.cfg, f"pinch_on_{finger}", th[0])
-            setattr(self.cfg, f"pinch_off_{finger}", th[1])
-            parts.append(f"{name}: aberta {o:.2f}, pinça {p:.2f} → dispara < {th[0]:.2f}")
-        # fist guard: learn how extended the other fingers are during *this* user's pinches
-        if index_v.shape[1] >= 4:
-            curls = np.concatenate([index_v[:, 2], middle_v[:, 3]])
-            limit = derive_guard_curl(curls)
-            self.cfg.pinch_fist_guard = limit is not None
-            if limit is not None:
-                self.cfg.pinch_guard_curl = limit
-            parts.append(f"guarda de punho: ligada (limite {limit:.2f})" if limit is not None
-                         else "guarda de punho: desligada (você pinça com os outros dedos dobrados)")
+            size = derive_ball_size(o, p)
+            if size is None:
+                parts.append(f"{name}: não separou (aberta {o:.2f}, contato {p:.2f})")
+            else:
+                sizes.append(size)
+                parts.append(f"{name}: aberta {o:.2f}, contato {p:.2f}")
+        if sizes:                                  # one ball size serves both fingers: the looser of the two contacts
+            self.cfg.pinch_ball_size = max(sizes)
+            parts.append(f"bolas de {self.cfg.pinch_ball_size * 100:.1f}% da mão")
         self.cfg.save()
+        ok_all = len(sizes) == 2
         self.msg = ("Pinça calibrada — " if ok_all else "Pinça calibrada parcialmente — ") + " | ".join(parts)
         if not ok_all:
             self.msg += ". Refaça (P) com os dedos realmente encostando e a mão bem visível."
