@@ -139,6 +139,28 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(loaded.smoothing_beta, Config().smoothing_beta)
 
 
+class ConfigMigrationTest(unittest.TestCase):
+    def test_old_files_get_the_new_pinch_defaults_but_keep_deliberate_choices(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "config.json"
+            path.write_text('{"pinch_confirm_frames": 2, "pinch_on_ratio": 0.3, "pinch_off_ratio": 0.45, "bubble_size": 150, '
+                            '"camera_props": {"gain": 5}}', encoding="utf-8")
+            cfg = Config.load(path)
+        default = Config()
+        self.assertEqual((cfg.pinch_confirm_frames, cfg.pinch_on_ratio, cfg.pinch_off_ratio),
+                         (default.pinch_confirm_frames, default.pinch_on_ratio, default.pinch_off_ratio))
+        self.assertEqual(cfg.bubble_size, 150)                         # the user's own choices survive
+        self.assertEqual(cfg.camera_props, {"gain": 5})
+
+    def test_current_files_are_not_reset(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "config.json"
+            cfg = Config()
+            cfg.pinch_confirm_frames = 5
+            cfg.save(path)
+            self.assertEqual(Config.load(path).pinch_confirm_frames, 5)
+
+
 class WindowsInputTest(unittest.TestCase):
     def test_input_struct_matches_the_win32_layout(self):
         self.assertEqual(ctypes.sizeof(mouse._Input), 40 if ctypes.sizeof(ctypes.c_void_p) == 8 else 28)

@@ -14,6 +14,7 @@ import numpy as np
 from .config import CALIBRATION_PATH, Config
 from . import head3d, mouse
 from .gaze_model import GazeModel, reject_outliers
+from .hands import derive_guard_curl, derive_thresholds, other_fingers_curl, pinch_metrics
 
 BG, FG, DIM = "#0b0f14", "#e6edf3", "#8b949e"
 ACCENT, GOOD, WARN, BAD, ORANGE = "#2f81f7", "#3fb950", "#d29922", "#f85149", "#f0883e"
@@ -43,6 +44,11 @@ POSE_SCALE = np.array([3.0, 3.0, 0.1, 0.1, 0.1])
 MODEL_COLOR, GHOST_COLOR, VIEW_BG = "#39c5cf", "#f0f6fc", "#0e131a"
 PROMPT_SECONDS = 1.6
 INTRO_BASE = (0.0, 0.08, 0.0)   # the webcam sits above the screen, so looking at the screen tilts the head slightly down
+# Pinch calibration: (key, instruction). "open" gives the baseline, the others the pinched values per finger.
+PINCH_STEPS = (("open", "Mão ABERTA, com os dedos bem separados"),
+               ("index", "Pinça: ponta do POLEGAR na ponta do INDICADOR — segure, com os outros dedos ESTICADOS"),
+               ("middle", "Pinça: ponta do POLEGAR na ponta do MÉDIO — segure, com os outros dedos ESTICADOS"))
+PINCH_PREP_S, PINCH_REC_S, PINCH_MIN_FRAMES = 1.8, 3.0, 8
 HEAD_PROMPTS = ("Vire a cabeça devagar para os lados", "Incline a cabeça para cima e para baixo",
                 "Aproxime e afaste um pouco o rosto", "Faça um pequeno círculo com a cabeça")
 
@@ -111,6 +117,9 @@ class CalibrationScreen:
         self.buf_poses: list[np.ndarray] = []
         self.buf_vis: list[tuple[float, float]] = []
         self.note = ""
+        self.pinch_step, self.pinch_t0 = 0, 0.0
+        self.pinch_buf: list[tuple[float, float, float, float]] = []
+        self.pinch_vals: dict[str, np.ndarray] = {}
         self.ref = np.array([0.0, 0.08, 0.0, 0.0, 0.0, -45.0])   # yaw, pitch, roll, tx, ty, tz of the user's start pose
         self.ref_frozen = False
         self.head_t0 = 0.0
@@ -169,6 +178,9 @@ class CalibrationScreen:
     def _on_key(self, e: tk.Event) -> None:
         key = e.keysym.lower()
         if key == "escape":
+            if self.phase == "pinch_cal":
+                self._set_phase("intro")
+                return
             if self.phase in ("countdown", "run", "head_intro"):
                 self.model.restore(self.snapshot)
                 self.msg = ""
@@ -190,6 +202,8 @@ class CalibrationScreen:
                 self.append_mode = False
             elif key == "i":
                 self.open_image_screen()
+            elif key == "p":
+                self._start_pinch_cal()
             elif key == "v" and self.model.ready:
                 self.msg, self.msg_color = "Olhe ao redor: a bolha mostra para onde você está olhando.", FG
                 self._set_phase("refine")
@@ -258,6 +272,92 @@ class CalibrationScreen:
         el = max(now - self.head_t0, 0.0) / PROMPT_SECONDS
         return head3d.HEAD_PROMPT_KEYS[int(el) % len(head3d.HEAD_PROMPT_KEYS)], el % 1.0
 
+    # ------------------------------------------------------- pinch calibration
+    def _start_pinch_cal(self) -> None:
+        self.pinch_step, self.pinch_t0, self.pinch_buf, self.pinch_vals = 0, time.perf_counter(), [], {}
+        self.msg = ""
+        self._set_phase("pinch_cal")
+
+    def _phase_pinch_cal(self, now: float, st) -> None:
+        W = self.W
+        key, instruction = PINCH_STEPS[self.pinch_step]
+        el = now - self.pinch_t0
+        self._text(W / 2, 70, "Calibração da pinça", 28, bold=True)
+        self._text(W / 2, 112, f"Passo {self.pinch_step + 1} de {len(PINCH_STEPS)} • ESC volta", 13, DIM)
+        self._text(W / 2, 230, instruction, 22, FG if key == "open" else WARN, bold=True, width=W - 200)
+        hand_ok = st is not None and st.hand_ok and st.ratios is not None
+        live = (f"indicador {st.ratios[0]:.2f}     médio {st.ratios[1]:.2f}   (0 = dedos encostados, 1 = bem separados)"
+                if hand_ok else "mão não detectada — mostre a mão para a câmera")
+        self._text(W / 2, 320, live, 16, GOOD if hand_ok else BAD)
+        if el < PINCH_PREP_S:
+            self._text(W / 2, 470, str(int(np.ceil(PINCH_PREP_S - el))), 90, ACCENT, bold=True)
+            self._text(W / 2, 560, "prepare-se…", 14, DIM)
+            return
+        rec = el - PINCH_PREP_S
+        if hand_ok and st.t != self.last_frame_t:
+            self.last_frame_t = st.t
+            self.pinch_buf.append(self._pinch_sample(st))
+        self._text(W / 2, 470, "gravando…", 22, GOOD, bold=True)
+        bx0, bx1, by = W / 2 - 250, W / 2 + 250, 530
+        self.cv.create_rectangle(bx0, by - 8, bx1, by + 8, outline="#30363d")
+        self.cv.create_rectangle(bx0, by - 8, bx0 + 500 * min(rec / PINCH_REC_S, 1.0), by + 8, fill=GOOD, outline="")
+        if rec >= PINCH_REC_S:
+            self._finish_pinch_step(key)
+
+    def _pinch_sample(self, st) -> tuple[float, float, float, float]:
+        """(index metric, middle metric, how extended the other fingers are for an index / a middle pinch)."""
+        hands, size = self.tracker.last_hands
+        curls = (9.9, 9.9)
+        if hands:
+            hand = min(hands, key=lambda h: min(pinch_metrics(h, *size)))
+            curls = (other_fingers_curl(hand, "index"), other_fingers_curl(hand, "middle"))
+        return float(st.ratios[0]), float(st.ratios[1]), float(curls[0]), float(curls[1])
+
+    def _finish_pinch_step(self, key: str) -> None:
+        if len(self.pinch_buf) < PINCH_MIN_FRAMES:
+            self.msg, self.msg_color = "A mão não foi detectada durante esse passo — repita com a mão bem visível.", WARN
+            self.pinch_t0, self.pinch_buf = time.perf_counter(), []
+            return
+        self.pinch_vals[key] = np.array(self.pinch_buf)
+        self.pinch_buf = []
+        self.pinch_step += 1
+        self.msg = ""
+        if self.pinch_step < len(PINCH_STEPS):
+            self.pinch_t0 = time.perf_counter()
+            return
+        self._apply_pinch_calibration()
+        self._set_phase("intro")
+
+    def _apply_pinch_calibration(self) -> None:
+        open_v, index_v, middle_v = (self.pinch_vals[k] for k in ("open", "index", "middle"))
+        parts, ok_all = [], True
+        for finger, col, pinched in (("index", 0, index_v), ("middle", 1, middle_v)):
+            # contact level = a low percentile: the recording also contains the finger closing in, not only the hold
+            o, p = float(np.median(open_v[:, col])), float(np.percentile(pinched[:, col], 40))
+            name = "indicador" if finger == "index" else "médio"
+            th = derive_thresholds(o, p)
+            if th is None:
+                ok_all = False
+                parts.append(f"{name}: não separou (aberta {o:.2f}, pinça {p:.2f})")
+                continue
+            setattr(self.cfg, f"pinch_on_{finger}", th[0])
+            setattr(self.cfg, f"pinch_off_{finger}", th[1])
+            parts.append(f"{name}: aberta {o:.2f}, pinça {p:.2f} → dispara < {th[0]:.2f}")
+        # fist guard: learn how extended the other fingers are during *this* user's pinches
+        if index_v.shape[1] >= 4:
+            curls = np.concatenate([index_v[:, 2], middle_v[:, 3]])
+            limit = derive_guard_curl(curls)
+            self.cfg.pinch_fist_guard = limit is not None
+            if limit is not None:
+                self.cfg.pinch_guard_curl = limit
+            parts.append(f"guarda de punho: ligada (limite {limit:.2f})" if limit is not None
+                         else "guarda de punho: desligada (você pinça com os outros dedos dobrados)")
+        self.cfg.save()
+        self.msg = ("Pinça calibrada — " if ok_all else "Pinça calibrada parcialmente — ") + " | ".join(parts)
+        if not ok_all:
+            self.msg += ". Refaça (P) com os dedos realmente encostando e a mão bem visível."
+        self.msg_color = GOOD if ok_all else WARN
+
     # ----------------------------------------------------------------- intro
     def _phase_intro(self, now: float, st) -> None:
         W, H = self.W, self.H
@@ -284,8 +384,10 @@ class CalibrationScreen:
                                                                           ("faça a pinça para testar", DIM))
         self._text(x0, y0 + 434, f"Pinça: {pinch[0]}", 12, pinch[1], "w")
         if st and st.ratios:
-            self._text(x0, y0 + 460, f"polegar-indicador {st.ratios[0]:.2f}   polegar-médio {st.ratios[1]:.2f}"
-                                     f"   (dispara abaixo de {self.cfg.pinch_on_ratio:.2f})", 11, DIM, "w")
+            on_i, on_m = self.cfg.pinch_thresholds("index")[0], self.cfg.pinch_thresholds("middle")[0]
+            self._text(x0, y0 + 460, f"indicador {st.ratios[0]:.2f} (dispara < {on_i:.2f})   "
+                                     f"médio {st.ratios[1]:.2f} (dispara < {on_m:.2f})", 11, DIM, "w")
+        self._text(x0, y0 + 486, "Não dispara? Aperte P para calibrar a pinça com a sua mão.", 11, DIM, "w")
 
         # options
         cx = 620
@@ -320,15 +422,19 @@ class CalibrationScreen:
         self._head_viewport(1140, 500, vs, "still", 0.0, st, caption="ciano = posição ideal • branco = sua cabeça", caption_size=10)
         self._text(1140, 500 - vs / 2 - 16, "Posição inicial da cabeça", 12, FG, bold=True)
 
-        keys = "ENTER iniciar  •  1/2/3 precisão  •  A modo  •  H cabeça  •  I imagem/contraste  •  R apagar  •  ESC sair"
+        keys = "ENTER iniciar  •  1/2/3 precisão  •  A modo  •  H cabeça  •  I imagem  •  P pinça  •  R apagar  •  ESC sair"
         if self.model.ready:
-            keys += "   •   V verificar/refinar"
+            keys += "   •   V refinar"
         self._text(W / 2, H - 40, keys, 13, DIM)
+        if self.msg:
+            self._text(W / 2, H - 78, self.msg, 13, self.msg_color, width=W - 160)
 
     def _face_guidance(self, st) -> tuple[str, str]:
         if st is None or not st.face_ok or st.face_box is None:
             return "Nenhum rosto detectado — fique de frente para a câmera", BAD
         cx, cy, wf = st.face_box
+        if st.brightness < 30:
+            return "Imagem quase preta — aperte I e depois R para restaurar os ajustes da câmera", BAD
         if st.brightness < 55:
             return "Pouca luz — acenda uma luz na sua frente", WARN
         if wf < 0.20:

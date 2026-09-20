@@ -12,7 +12,7 @@ import numpy as np
 
 from . import imaging, mouse
 from .blink import BlinkDetector
-from .camera_props import CAMERA_PROPS
+from .camera_props import CAMERA_DEFAULTS, CAMERA_PROPS
 from .config import CALIBRATION_PATH, Config
 from .features import extract_features, eye_region_box, face_box
 from .filters import MedianFilter, OneEuroFilter
@@ -78,6 +78,7 @@ class Tracker(threading.Thread):
         self._shown_pinch: str | None = None
         self._refit_timer: threading.Timer | None = None
         self._preview_n = 0
+        self.last_hands: tuple[list, tuple[int, int]] = ([], (640, 480))
 
     # ---------------------------------------------------------------- public
     @property
@@ -101,6 +102,13 @@ class Tracker(threading.Thread):
     def set_camera_prop(self, prop: int, value: float) -> None:
         """Queue a cv2.CAP_PROP_* change; it is applied by the capture thread (which owns the device)."""
         self._pending_props[prop] = value
+
+    def restore_camera_defaults(self) -> None:
+        """Put the camera driver back to its original settings and forget the user's overrides."""
+        for key, value in (self.cfg.camera_original or CAMERA_DEFAULTS).items():
+            if key in CAMERA_PROPS:
+                self.set_camera_prop(CAMERA_PROPS[key][0], float(value))
+        self.cfg.camera_props.clear()
 
     def auto_adjust(self) -> tuple[int, float, float] | None:
         """Brightness/contrast/gamma that stretch the eye region of the *raw* image; None without a face."""
@@ -181,6 +189,8 @@ class Tracker(threading.Thread):
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cfg.camera_height)
         cap.set(cv2.CAP_PROP_FPS, cfg.camera_fps)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        if not cfg.camera_original and not cfg.camera_props:   # first run: remember what the driver looked like
+            cfg.camera_original = {k: float(cap.get(v[0])) for k, v in CAMERA_PROPS.items()}
         for key, value in cfg.camera_props.items():  # settings the user chose in the image screen
             if key in CAMERA_PROPS:
                 cap.set(CAMERA_PROPS[key][0], float(value))
@@ -217,7 +227,8 @@ class Tracker(threading.Thread):
         holding = self._blink.settling(t)
 
         # pinch clicks
-        pinch = self._pinch.update(t, hands) if cfg.hand_clicks else None
+        pinch = self._pinch.update(t, hands, (w, h)) if cfg.hand_clicks else None
+        self.last_hands = (hands, (w, h))       # raw landmarks of the latest frame (diagnostics)
         self._drive_mouse(t, gaze, holding, pinch)
 
         preview = eye_preview = eye_stats = None

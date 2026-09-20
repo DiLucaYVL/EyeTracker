@@ -5,6 +5,11 @@ import cv2
 
 # key: (cv2 property id, label, hint, default min, default max, step)
 # Ranges are typical UVC values; the UI widens them to include whatever the driver reports.
+# Driver values read from a camera nobody had touched yet (typical UVC defaults). "Restaurar tudo" falls back to these
+# when the app has no record of the camera's original state (Config.camera_original).
+CAMERA_DEFAULTS: dict[str, float] = {"exposure": -4.0, "gain": 1.0, "brightness": 0.0, "contrast": 0.0, "saturation": 64.0,
+                                     "gamma": 100.0, "sharpness": 2.0, "backlight": 3.0}
+
 CAMERA_PROPS: dict[str, tuple[int, str, str, float, float, float]] = {
     "exposure": (cv2.CAP_PROP_EXPOSURE, "Exposição", "menor = mais fps e imagem mais escura", -10, -1, 1),
     "gain": (cv2.CAP_PROP_GAIN, "Ganho", "clareia sem gastar fps (com mais ruído)", 0, 100, 1),

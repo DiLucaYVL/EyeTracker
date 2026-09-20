@@ -51,6 +51,7 @@ class SettingsWindow:
 
         btns = ttk.Frame(body)
         btns.grid(row=r + 3, column=0, columnspan=3, pady=(12, 0), sticky="e")
+        ttk.Button(btns, text="Zerar calibração da pinça", command=self._reset_pinch).pack(side="left", padx=4)
         ttk.Button(btns, text="Salvar", command=self._save).pack(side="left", padx=4)
         ttk.Button(btns, text="Fechar", command=self.win.destroy).pack(side="left")
         self._closed = False
@@ -65,6 +66,11 @@ class SettingsWindow:
         value = round(value / step) * step
         setattr(self.cfg, attr, int(round(value)) if is_int else round(value, 4))
         label.configure(text=self._fmt(value, is_int))
+
+    def _reset_pinch(self) -> None:
+        """Forget the per-finger thresholds measured by the pinch calibration; the sliders above apply again."""
+        for name in ("pinch_on_index", "pinch_off_index", "pinch_on_middle", "pinch_off_middle"):
+            setattr(self.cfg, name, 0.0)
 
     def _save(self) -> None:
         self.cfg.save()
@@ -86,12 +92,13 @@ class SettingsWindow:
         rat = st.ratios if st else None
         for i, (name, key) in enumerate((("Polegar+indicador", 0), ("Polegar+médio", 1))):
             y = 26 + i * 18
+            on_thr, off_thr = self.cfg.pinch_thresholds("index" if key == 0 else "middle")
             c.create_text(4, y + 7, text=name, fill="#8b949e", anchor="w", font=("Segoe UI", 8))
             c.create_rectangle(110, y, 450, y + 14, outline="#30363d")
             if rat:
                 v = min(rat[key] / 1.0, 1.0)
-                on = rat[key] < self.cfg.pinch_on_ratio
+                on = rat[key] < on_thr
                 c.create_rectangle(110, y, 110 + 340 * v, y + 14, fill="#3fb950" if on else "#2f81f7", outline="")
-            c.create_line(110 + 340 * self.cfg.pinch_on_ratio, y - 1, 110 + 340 * self.cfg.pinch_on_ratio, y + 15, fill="#f0883e", width=2)
-            c.create_line(110 + 340 * self.cfg.pinch_off_ratio, y - 1, 110 + 340 * self.cfg.pinch_off_ratio, y + 15, fill="#3fb950", width=2)
+            c.create_line(110 + 340 * on_thr, y - 1, 110 + 340 * on_thr, y + 15, fill="#f0883e", width=2)
+            c.create_line(110 + 340 * off_thr, y - 1, 110 + 340 * off_thr, y + 15, fill="#3fb950", width=2)
         self.win.after(50, self._tick)

@@ -42,14 +42,22 @@ FACE_MODEL_PATH = find_model("face_landmarker.task", DATA_DIR, RESOURCE_DIR)
 HAND_MODEL_PATH = find_model("hand_landmarker.task", DATA_DIR, RESOURCE_DIR)
 
 
+# Bump when a *default* changes in a way old saved files must not override. Only the keys listed for a version are reset
+# when loading a file written before it (everything the user chose deliberately is kept).
+CONFIG_VERSION = 2
+RESET_ON_UPGRADE = {2: ("pinch_on_ratio", "pinch_off_ratio", "pinch_confirm_frames")}
+
+
 @dataclass
 class Config:
+    config_version: int = 0
     # camera
     camera_index: int = 0
     camera_width: int = 640
     camera_height: int = 480
     camera_fps: int = 30
     camera_props: dict = field(default_factory=dict)  # driver settings the user changed, e.g. {"saturation": 60}
+    camera_original: dict = field(default_factory=dict)  # driver settings seen before the user changed anything
     camera_fourcc: str = ""           # e.g. "MJPG"; empty = driver default (forcing MJPG breaks some webcams)
     # image adjustments applied before detection (neutral = 0 / 1 / 1 / 0 / 0)
     img_brightness: int = 0
@@ -70,14 +78,26 @@ class Config:
     blink_open_thr: float = 0.35
     # hand pinch clicks (ratio = thumb-to-fingertip distance / palm length)
     hand_clicks: bool = True
-    pinch_on_ratio: float = 0.30
-    pinch_off_ratio: float = 0.45
-    pinch_confirm_frames: int = 2
+    pinch_on_ratio: float = 0.25
+    pinch_off_ratio: float = 0.50
+    pinch_on_index: float = 0.0       # per-finger overrides written by the pinch calibration (0 = use the global values)
+    pinch_off_index: float = 0.0
+    pinch_on_middle: float = 0.0
+    pinch_off_middle: float = 0.0
+    pinch_fist_guard: bool = True     # never start a click while the other three fingers are curled (fist / relaxed hand)
+    pinch_guard_curl: float = 1.5     # "curled" = wrist-to-fingertip distance below this many palm lengths (set by the wizard)
+    pinch_confirm_frames: int = 3     # ~0.15-0.2 s: removes accidental crossings while gesturing
     drag_hold_ms: int = 350
     # learning / calibration
     learn_from_clicks: bool = True
     calibration_points: int = 16
     calibration_head: bool = True     # second calibration phase: look at the targets while moving the head
+
+    def pinch_thresholds(self, finger: str) -> tuple[float, float]:
+        """(on, off) for "index" or "middle": the calibrated values if present, otherwise the global ones."""
+        on = getattr(self, f"pinch_on_{finger}") or self.pinch_on_ratio
+        off = getattr(self, f"pinch_off_{finger}") or self.pinch_off_ratio
+        return on, max(off, on + 0.05)
 
     @classmethod
     def load(cls, path: Path = CONFIG_PATH) -> "Config":
@@ -87,11 +107,14 @@ class Config:
         except (OSError, ValueError):
             return cfg
         known = {f.name: f.type for f in fields(cls)}
+        stale = {k for v, keys in RESET_ON_UPGRADE.items() if int(data.get("config_version", 0)) < v for k in keys}
         for key, value in data.items():
-            if key in known:
+            if key in known and key not in stale:
                 setattr(cfg, key, type(getattr(cfg, key))(value))
+        cfg.config_version = CONFIG_VERSION
         return cfg
 
     def save(self, path: Path = CONFIG_PATH) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
+        self.config_version = CONFIG_VERSION
         path.write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")

@@ -81,8 +81,19 @@ Atalhos globais: `Ctrl+Alt+E` liga/desliga o mouse • `Ctrl+Alt+B` mostra/ocult
 - Com pouca luz a webcam alonga a exposição e cai para ~10–15 fps. Acenda uma luz ou reduza a *Exposição* na aba Câmera e compense com Ganho/Gama/CLAHE.
 - Câmera na altura dos olhos, ~50 cm da tela. Se mudar de posição, refaça (ou refine) a calibração.
 - Precisão realista de webcam: erro típico de 2–5% da tela. Não substitui um rastreador infravermelho.
-- A câmera precisa **enxergar sua mão** para a pinça funcionar (a tela inicial da calibração tem um teste de pinça com os valores ao vivo).
-- Alterações no painel da câmera **persistem no driver** e afetam outros apps. Use o botão *Padrão* do painel nativo para voltar.
+- A câmera precisa **enxergar sua mão** para a pinça funcionar. O clique é definido pela **distância entre as pontas dos dedos**
+  (ponta do polegar × ponta do indicador/médio, em unidades do tamanho da mão: 0 = encostadas, 1 = bem separadas; combina a medida na
+  imagem e a 3D do MediaPipe). A tela inicial da calibração mostra o valor ao vivo de cada dedo.
+- Se a pinça não disparar ou disparar sem querer, aperte **`P`** na tela inicial da calibração. O assistente (15 s) mede a sua mão aberta
+  e em pinça, para indicador e médio, e define: o limiar de disparo de cada dedo (logo acima do nível de contato *da sua* pinça) e a
+  **guarda de punho**, que impede iniciar clique quando os outros três dedos estão dobrados (punho ou mão relaxada, onde o polegar
+  fica perto das pontas sem intenção de clicar). Faça a pinça com os outros dedos **esticados**; se você pinça com eles dobrados,
+  o assistente desliga a guarda. "Zerar calibração da pinça" está em *Configurações…*.
+- Limite conhecido: se o polegar passar rapidamente por cima da ponta do indicador (sem tocar), a câmera única não distingue isso de
+  uma pinça muito rápida e pode gerar um clique breve. Em gestos livres intencionalmente difíceis isso ocorreu ~1 vez a cada 6 s.
+- Alterações na aba *Câmera* **persistem no driver**, afetam outros apps e são reaplicadas toda vez que o programa abre. Se a imagem
+  ficar escura ou estranha, abra *Imagem e contraste* e aperte **`R` (Restaurar tudo)**: volta o driver ao estado original e zera os ajustes de software.
+  O programa avisa quando a imagem está quase preta.
 
 ## Configuração
 

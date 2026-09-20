@@ -161,7 +161,8 @@ class App:
             self.status["cam"].set("Câmera: iniciando…")
         else:
             hands = "mão ✓" if st.hand_ok else "mão –"
-            self.status["cam"].set(f"Câmera: {st.fps:.0f} fps • rosto {'✓' if st.face_ok else '✗'} • {hands}")
+            dark = " • ⚠ imagem muito escura (abra Imagem e use Restaurar tudo)" if st.brightness < 30 else ""
+            self.status["cam"].set(f"Câmera: {st.fps:.0f} fps • rosto {'✓' if st.face_ok else '✗'} • {hands}{dark}")
         if self.model.ready:
             err = f" • erro ≈ {self.model.cv_px:.0f} px" if self.model.cv_px else ""
             self.status["calib"].set(f"Calibração: {self.model.n_groups} alvos, {self.model.n_samples} amostras{err}")

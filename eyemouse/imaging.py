@@ -67,6 +67,8 @@ def eye_stats(gray_roi: np.ndarray) -> tuple[float, float, float]:
 
 def describe_eye_quality(mean: float, spread: float, clipped: float) -> tuple[str, str]:
     """Human-readable verdict and a level: 'good' | 'warn' | 'bad'."""
+    if mean < 25:
+        return "Imagem quase preta — algum ajuste (brilho, gama, exposição) está escurecendo demais. Aperte R para restaurar", "bad"
     if mean < 70:
         return "Olhos escuros demais — aumente brilho/gama ou acenda uma luz", "bad"
     if mean > 190 or clipped > 0.08:

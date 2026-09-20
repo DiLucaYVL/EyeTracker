@@ -13,7 +13,7 @@ from typing import Callable
 
 from . import imaging, mouse
 from .calibration_ui import ACCENT, BAD, BG, DIM, FG, FONT, GOOD, WARN
-from .camera_props import CAMERA_PROPS
+from .camera_props import CAMERA_DEFAULTS, CAMERA_PROPS
 from .config import Config
 
 PANEL = "#161b22"
@@ -107,7 +107,7 @@ class ImageScreen:
         btns = tk.Frame(panel, bg=PANEL)
         btns.pack(fill="x")
         tk.Button(btns, text="Auto-ajustar pelos olhos  [A]", command=self.auto, **style).pack(side="left", padx=(0, 6))
-        tk.Button(btns, text="Restaurar software  [R]", command=self.reset, **style).pack(side="left", padx=6)
+        tk.Button(btns, text="Restaurar tudo  [R]", command=self.reset, **style).pack(side="left", padx=6)
         tk.Button(btns, text="Painel nativo…  [P]", command=self.tracker.open_camera_dialog, **style).pack(side="left", padx=6)
         self.orig_var = tk.BooleanVar(value=False)
         tk.Checkbutton(panel, text="Mostrar imagem original (comparar)  [O]", variable=self.orig_var, bg=PANEL, fg=FG,
@@ -182,9 +182,20 @@ class ImageScreen:
         self.show_tab("soft")
 
     def reset(self) -> None:
+        """Back to the untouched state: no software adjustments and the camera driver's original settings."""
         for attr, value in DEFAULTS.items():
             self._soft_vars[attr].set(value)
             self._set_soft(attr, value)
+        self.tracker.restore_camera_defaults()
+        self._loading = True
+        try:
+            for key, value in (self.cfg.camera_original or CAMERA_DEFAULTS).items():
+                if key in self._cam_vars:
+                    _, _, _, lo, hi, _ = CAMERA_PROPS[key]
+                    self._cam_scales[key].configure(from_=min(lo, value), to=max(hi, value))
+                    self._cam_vars[key].set(value)
+        finally:
+            self._loading = False
 
     def _on_key(self, e: tk.Event) -> None:
         key = e.keysym.lower()
