@@ -347,6 +347,123 @@ class HandRolesTest(unittest.TestCase):
         self.assertFalse(self.roles.active)
 
 
+def two_hands(touching, scroll_right=False):
+    """The left-in-image hand (palm x 0.3) and the right-in-image hand (palm x 0.7); their index tips touch or are far apart."""
+    a = hand_at(0.3, 0.6, tip=(0.5, 0.45))
+    b = hand_at(0.7, 0.6, scroll=scroll_right, tip=(0.505 if touching else 0.85, 0.45))
+    return [a, b]
+
+
+class PointerSwitchTest(unittest.TestCase):
+    """Touching the index ball of one hand to the index ball of the other hands the cursor over to the other hand."""
+
+    def setUp(self):
+        self.cfg = Config()
+        self.cfg.hand_mode = "hand"
+        self.roles = HandRoles(self.cfg)
+        self.t = 0.0
+
+    def frames(self, hands_fn, n=3):
+        for _ in range(n):
+            self.roles.update(self.t, hands_fn(), IMG)
+            self.t += 1 / 30
+
+    def pointer(self, hands):
+        return next(i for i, h in enumerate(hands) if h is self.roles.pointing(hands))
+
+    def test_the_touch_switches_the_pointing_hand_once(self):
+        hands = two_hands(False)
+        self.frames(lambda: hands)
+        first = self.pointer(hands)
+        touching = two_hands(True)
+        self.frames(lambda: touching, 4)                              # touching for several frames: only ONE switch
+        self.assertEqual(self.roles.switches, 1)
+        self.assertNotEqual(self.pointer(touching), first)
+
+    def test_the_hand_stays_the_pointer_after_the_tips_separate(self):
+        self.frames(lambda: two_hands(False))
+        first = self.pointer(two_hands(False))
+        self.frames(lambda: two_hands(True), 2)
+        self.frames(lambda: two_hands(False), 5)
+        self.assertNotEqual(self.pointer(two_hands(False)), first)
+
+    def test_touching_again_switches_back(self):
+        self.frames(lambda: two_hands(False))
+        first = self.pointer(two_hands(False))
+        self.frames(lambda: two_hands(True), 2)
+        self.frames(lambda: two_hands(False), 30)                    # well past the cool-down
+        self.frames(lambda: two_hands(True), 2)
+        self.assertEqual(self.roles.switches, 2)
+        self.assertEqual(self.pointer(two_hands(True)), first)
+
+    def test_a_jittery_touch_does_not_bounce_back_and_forth(self):
+        self.frames(lambda: two_hands(False))
+        for i in range(6):                                            # touch / apart / touch / apart within the cool-down
+            self.frames(lambda i=i: two_hands(i % 2 == 0), 1)
+        self.assertEqual(self.roles.switches, 1)
+
+    def test_only_in_hand_mode(self):
+        self.cfg.hand_mode = "pinch"
+        self.frames(lambda: two_hands(True), 4)
+        self.assertEqual(self.roles.switches, 0)
+
+    def test_a_single_hand_or_touching_tips_of_one_hand_do_nothing(self):
+        self.frames(lambda: [two_hands(True)[0]], 4)
+        self.assertEqual(self.roles.switches, 0)
+
+    def test_it_still_works_when_scrolling_is_switched_off(self):
+        self.cfg.hand_scroll = False
+        self.frames(lambda: two_hands(False))
+        first = self.pointer(two_hands(False))
+        self.frames(lambda: two_hands(True), 3)
+        self.assertEqual(self.roles.switches, 1)
+        self.assertNotEqual(self.pointer(two_hands(True)), first)
+
+    def test_a_scrolling_hand_cannot_take_the_cursor(self):
+        self.frames(lambda: two_hands(False, scroll_right=True), 8)   # the right-in-image hand scrolls
+        self.frames(lambda: two_hands(True, scroll_right=True), 4)
+        self.assertEqual(self.roles.switches, 0)
+        hands = two_hands(True, scroll_right=True)
+        self.assertEqual(self.pointer(hands), 0)                      # the idle hand keeps pointing
+
+
+class PointerSwitchPipelineTest(unittest.TestCase):
+    """Whole frame pipeline: the cursor follows the fingertip of the hand that was handed the cursor."""
+
+    def setUp(self):
+        self.cfg = Config()
+        self.cfg.head_mode, self.cfg.hand_mode = "off", "hand"
+        self.tracker = Tracker(self.cfg, ready_model(), queue.SimpleQueue())
+        self.tracker.mouse_enabled = True
+        patcher = mock.patch("eyemouse.tracker.mouse")
+        self.mouse = patcher.start()
+        self.addCleanup(patcher.stop)
+        self.frame = np.zeros((480, 640, 3), np.uint8)
+        self.t = 0.0
+        self.switched = []
+        self.tracker.on_switch = lambda: self.switched.append(self.t)
+
+    def feed(self, hands, n=3):
+        for _ in range(n):
+            self.tracker._process(self.t, self.frame, self.frame, None, hands, 30.0)
+            self.t += 1 / 30
+        return self.tracker.latest()
+
+    def test_the_pointer_moves_to_the_other_hand_and_the_user_is_told(self):
+        state = self.feed(two_hands(False))
+        first = state.pointer
+        self.assertIn(first, (0, 1))
+        state = self.feed(two_hands(True), 2)
+        self.assertEqual(state.pointer, 1 - first)
+        self.assertEqual(len(self.switched), 1)                        # the callback (the sound) fired once
+        state = self.feed(two_hands(False), 3)
+        self.assertEqual(state.pointer, 1 - first)
+
+    def test_pointer_is_only_reported_in_hand_mode(self):
+        self.cfg.hand_mode = "pinch"
+        self.assertIsNone(self.feed(two_hands(False)).pointer)
+
+
 class ConfigModesTest(unittest.TestCase):
     def test_defaults_and_names(self):
         cfg = Config()

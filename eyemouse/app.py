@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import queue
 import tkinter as tk
+import winsound
 from tkinter import messagebox, ttk
 
 from . import mouse
@@ -26,7 +27,7 @@ HEAD_HELP = {
 }
 HAND_HELP = {
     "pinch": "Mão: pinça polegar+indicador = clique esquerdo, polegar+médio = direito, 4 dedos dobrados (joinha) = rolagem (mova a mão).",
-    "hand": "Mão: a ponta do dedo indicador move o cursor (também durante a pinça, para arrastar); pinça = bolas do polegar e do indicador/médio se tocam; 4 dedos dobrados (joinha) rolam (mova a mão). As duas mãos valem. Sem mão, vale o modo de cabeça.",
+    "hand": "Mão: a ponta do dedo indicador move o cursor (também durante a pinça, para arrastar); pinça = bolas do polegar e do indicador/médio se tocam; 4 dedos dobrados (joinha) rolam (mova a mão). As duas mãos valem: encoste o indicador de uma mão no da outra para trocar qual mão move o cursor. Sem mão, vale o modo de cabeça.",
 }
 SOURCE_NAMES = {"eye": "olho", "head_eye": "cabeça + olho", "head": "cabeça", "hand": "mão", "off": "gestos da mão (olho/cabeça desativados)", "none": "—"}
 
@@ -40,6 +41,7 @@ class App:
         self.events: queue.SimpleQueue = queue.SimpleQueue()
         self.actions: queue.SimpleQueue = queue.SimpleQueue()
         self.tracker = Tracker(cfg, self.model, self.events)
+        self.tracker.on_switch = self._pointer_switched          # a short sound confirms that the cursor changed hands
         self.tracker.mouse_enabled = cfg.start_with_mouse and self.tracker.mode_ready()
         self.tracker.start()
 
@@ -234,6 +236,13 @@ class App:
     def toggle_learn(self) -> None:
         self.cfg.learn_from_clicks = not self.cfg.learn_from_clicks
         self._refresh_buttons()
+
+    @staticmethod
+    def _pointer_switched() -> None:
+        try:
+            winsound.PlaySound("SystemAsterisk", winsound.SND_ALIAS | winsound.SND_ASYNC)
+        except RuntimeError:
+            pass
 
     def _on_head_mode(self) -> None:
         self.set_head_mode(self.head_var.get())

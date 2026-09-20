@@ -11,7 +11,8 @@ Hand modes (Config.hand_mode):
   * "hand"     - the TIP OF THE INDEX FINGER (its ball) moves the cursor while a hand is visible. A pinch (the thumb
                  ball touching the index ball) clicks and the fingertip keeps moving the cursor while pinching (that is
                  how you drag); four folded fingers (thumb free, e.g. a thumbs-up) scroll (see below) and the cursor
-                 stays put. Both hands count. Without a hand the head mode takes over.
+                 stays put. Both hands count, and touching the index ball of one hand to the index ball of the other
+                 hands the cursor over to that other hand. Without a hand the head mode takes over.
 """
 from __future__ import annotations
 
@@ -69,7 +70,7 @@ def pointing_hand(hands: list[HandData]) -> HandData:
 # Index, middle, ring and pinky folded (the thumb does not matter: thumbs-up or fist) = scroll mode; then moving the
 # hand scrolls like a two-finger touchpad gesture: the faster the hand moves, the faster the page scrolls.
 from .config import Config  # noqa: E402
-from .hands import FOLDED_ENTER, FOLDED_EXIT, finger_curls  # noqa: E402
+from .hands import FOLDED_ENTER, FOLDED_EXIT, finger_curls, index_tips_touching  # noqa: E402
 
 WHEEL_DELTA = 120                      # one wheel notch
 SCROLL_ENTER_FRAMES, SCROLL_EXIT_FRAMES = 3, 2   # consecutive frames folded / open to enter / leave scroll mode
@@ -166,6 +167,7 @@ class HandRoles:
 
     ASSOC_DIST = 0.30      # frame heights: max movement between frames for a hand to keep its id
     FORGET_S = 1.0         # ids of hands that vanished are forgotten after this long
+    SWITCH_COOLDOWN_S = 0.8  # the tips are still together right after touching: a switch cannot repeat sooner
 
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -177,18 +179,21 @@ class HandRoles:
         self._ids: list[int] = []
         self._next_id = 0
         self._pointer_id: int | None = None
+        self._was_touching = False
+        self._last_switch = -1e9
+        self.switches = 0            # how many times the cursor was handed to the other hand
 
     @property
     def active(self) -> bool:
-        return any(c.active for c in self._scrolls.values())
+        return self.cfg.hand_scroll and any(c.active for c in self._scrolls.values())
 
     @property
     def speed(self) -> float:
-        return max((c.speed for c in self._scrolls.values() if c.active), default=0.0)
+        return max((c.speed for c in self._scrolls.values() if c.active), default=0.0) if self.cfg.hand_scroll else 0.0
 
     def scrolling(self, index: int) -> bool:
-        """Is the `index`-th hand of the latest update() in scroll mode (four fingers folded)?"""
-        if index >= len(self._ids):
+        """Is the `index`-th hand of the latest update() in scroll mode (four fingers folded)? Never when scroll is off."""
+        if not self.cfg.hand_scroll or index >= len(self._ids):
             return False
         ctrl = self._scrolls.get(self._ids[index])
         return bool(ctrl and ctrl.active)
@@ -214,7 +219,12 @@ class HandRoles:
         wheel = [0, 0]
         for hid, hand, centre in zip(ids, hands, centres):
             self._last[hid] = (t, centre)
-            dv, dh = self._scrolls.setdefault(hid, ScrollController(self.cfg)).update(t, hand, size)
+            ctrl = self._scrolls.setdefault(hid, ScrollController(self.cfg))
+            if self.cfg.hand_scroll:
+                dv, dh = ctrl.update(t, hand, size)
+            else:
+                ctrl.reset()
+                dv = dh = 0
             wheel[0] += dv
             wheel[1] += dh
         for hid in list(self._scrolls):
@@ -226,7 +236,23 @@ class HandRoles:
         self._ids = ids
         if self._pointer_id is not None and self._pointer_id not in ids and t - self._last.get(self._pointer_id, (-1e9, None))[0] > self.FORGET_S:
             self._pointer_id = None
+        self._maybe_switch(t, hands, size)
         return wheel[0], wheel[1]
+
+    def _maybe_switch(self, t: float, hands: list[HandData], size: tuple[int, int]) -> None:
+        """Index ball of one hand touching the index ball of the other = the other hand takes over the cursor."""
+        touching = (self.cfg.hand_mode == "hand" and len(hands) == 2 and not (self.scrolling(0) or self.scrolling(1))
+                    and index_tips_touching(hands[0], hands[1], size, self.cfg.pinch_ball_size))
+        if touching and not self._was_touching and t - self._last_switch >= self.SWITCH_COOLDOWN_S:
+            current = self.pointing(hands)                     # also settles who is pointing right now
+            if current is not None:
+                k = next(i for i, h in enumerate(hands) if h is current)
+                other = [j for j in range(len(hands)) if j != k and not self.scrolling(j)]
+                if other:
+                    self._pointer_id = self._ids[other[0]]
+                    self._last_switch = t
+                    self.switches += 1
+        self._was_touching = touching
 
     def pointing(self, hands: list[HandData]) -> HandData | None:
         """The hand that moves the cursor: an idle one (not scrolling), preferring the one that was already pointing."""

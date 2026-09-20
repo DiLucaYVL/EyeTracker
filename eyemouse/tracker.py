@@ -52,6 +52,7 @@ class FrameState:
     scrolling: bool = False           # closed hand = scroll mode
     scroll_speed: float = 0.0         # scrolling hand speed in frame heights per second
     hand_states: tuple[str, ...] = ()  # per visible hand: idle | scroll | pinch_left | pinch_right
+    pointer: int | None = None        # index of the hand that moves the cursor (hand mode), else None
 
 
 class Tracker(threading.Thread):
@@ -88,6 +89,9 @@ class Tracker(threading.Thread):
         self._src = "none"
         self._hold_offset: np.ndarray | None = None   # hand pointing: cursor minus hand target, kept while pinching
         self._scroll = HandRoles(cfg)                  # per-hand scroll state (folded fingers): both hands count
+        self.on_switch = None                          # called (from the tracker thread) when the cursor changes hands
+        self._seen_switches = 0
+        self._pointer_idx: int | None = None
         self.frame_sink = None                        # optional callable(t, raw_frame): diagnostics / clip recording
         self._hand_hist: deque[tuple[float, np.ndarray]] = deque(maxlen=60)
         self.last_hands: tuple[list, tuple[int, int]] = ([], (640, 480))
@@ -240,12 +244,14 @@ class Tracker(threading.Thread):
 
         self.last_hands = (hands, (w, h))       # raw landmarks of the latest frame (diagnostics)
 
-        # four folded fingers (thumb free) = scroll mode (wheel events are sent below, once the mouse is ours)
-        if cfg.hand_scroll:
-            wheel = self._scroll.update(t, hands, (w, h))
-        else:
-            self._scroll.reset()
-            wheel = (0, 0)
+        # per-hand roles: four folded fingers (thumb free) = scroll mode (wheel events are sent below, once the mouse is
+        # ours); index ball on the other hand's index ball = hand the cursor over to that hand. With scrolling switched
+        # off the roles still run (the switch gesture works) but nothing scrolls.
+        wheel = self._scroll.update(t, hands, (w, h))
+        if self._scroll.switches != self._seen_switches:
+            self._seen_switches = self._scroll.switches
+            if self.on_switch is not None:
+                self.on_switch()
 
         # pinch: the ONLY criterion is that the two fingertip balls touch. The one arbitration between gestures: a hand
         # whose four fingers are folded (scroll pose) does not START a click (the thumb resting on a folded finger would).
@@ -254,7 +260,7 @@ class Tracker(threading.Thread):
         pinch = self._pinch.update(t, hands, (w, h), blocked) if cfg.hand_clicks else None
 
         states = tuple(
-            "scroll" if cfg.hand_scroll and self._scroll.scrolling(i) else (f"pinch_{pinch}" if pinch and i == self._pinch.hand_index else "idle")
+            "scroll" if self._scroll.scrolling(i) else (f"pinch_{pinch}" if pinch and i == self._pinch.hand_index else "idle")
             for i in range(len(hands)))
 
         # cursor target: eye / head+eye / head / hand
@@ -284,15 +290,16 @@ class Tracker(threading.Thread):
         preview = eye_preview = eye_stats = None
         if self.want_preview:
             image_mode = self.preview_mode == "image"
-            preview = self._make_preview(raw if self.show_original else frame, face, hands, states)
+            preview = self._make_preview(raw if self.show_original else frame, face, hands, states, self._pointer_idx)
             if image_mode and face is not None:
                 eye_preview, eye_stats = self._make_eye_views(frame, raw, face)
         self._state = FrameState(
             t=t, face_ok=face_ok, feat=feat, blink_score=score, eyes_closed=closed, gaze=gaze, face_box=box,
             brightness=float(frame[::8, ::8].mean()), fps=fps, hand_ok=bool(hands), pinch=pinch,
             ratios=self._pinch.ratios, preview=preview, eye_preview=eye_preview, eye_stats=eye_stats,
-            head_vis=head_vis, source=source, scrolling=self._scroll.active and cfg.hand_scroll,
-            scroll_speed=self._scroll.speed, hand_states=states)
+            head_vis=head_vis, source=source, scrolling=self._scroll.active,
+            scroll_speed=self._scroll.speed, hand_states=states,
+            pointer=self._pointer_idx if cfg.hand_mode == "hand" else None)
         if self.frame_sink is not None:
             self.frame_sink(t, raw)
 
@@ -301,9 +308,12 @@ class Tracker(threading.Thread):
         """(target px or None, source name, hold) for the current frame according to the head/hand modes."""
         cfg = self.cfg
         screen = self.model.screen
+        self._pointer_idx = None
         if cfg.hand_mode == "hand" and hands:
-            # both hands count: an idle hand points while the other one may be scrolling; a pinch never freezes it
-            hand = self._scroll.pointing(hands) if cfg.hand_scroll else pointing_hand(hands)
+            # both hands count: one idle hand points (touching index balls swaps it) while the other may be scrolling;
+            # a pinch never freezes it
+            hand = self._scroll.pointing(hands)
+            self._pointer_idx = next((i for i, h in enumerate(hands) if h is hand), None)
             if hand is None:
                 return None, "hand", True            # every visible hand is scrolling: the cursor stays where it is
             return hand_target_px(hand, screen, cfg.hand_gain), "hand", False
@@ -404,7 +414,7 @@ class Tracker(threading.Thread):
         self.model.save(CALIBRATION_PATH)
 
     # --------------------------------------------------------------- preview
-    def _make_preview(self, frame, face, hands, states=()) -> bytes | None:
+    def _make_preview(self, frame, face, hands, states=(), pointer=None) -> bytes | None:
         self._preview_n += 1
         if self._preview_n % 2:  # ~15 fps is plenty for the setup screen
             return self._state.preview if self._state else None
@@ -437,6 +447,10 @@ class Tracker(threading.Thread):
                 if fills[i]:
                     cv2.circle(small, tips[i], radius, fill[i], -1)
                 cv2.circle(small, tips[i], radius, edge[i], 2)
+            if pointer == k:                              # this hand moves the cursor: ring + label on its index ball
+                cv2.circle(small, tips[8], radius + 5, (255, 255, 0), 2)
+                cv2.putText(small, "CURSOR", (tips[8][0] + radius + 8, tips[8][1] - radius - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                            (255, 255, 0), 2)
         rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
         return b"P6 %d %d 255\n" % (pw, ph) + rgb.tobytes()
 

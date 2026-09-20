@@ -94,6 +94,15 @@ Dois menus no painel escolhem **o que move o mouse**. O modo é salvo e vale na 
 - **Sensibilidade do movimento** (sliders 0,3–3,0): *Cabeça*, *Mão* e *Rolagem*. O modo Olho não tem sensibilidade: sua precisão vem da calibração.
 - Atalhos: `Ctrl+Alt+H` alterna o modo da cabeça, `Ctrl+Alt+M` o da mão.
 
+## Trocar a mão do cursor
+
+No modo *Ponta do indicador move o cursor*, com as **duas mãos** na câmera, quem move o cursor é uma delas. Para **passar o cursor para a outra mão**,
+encoste a **bola da ponta do indicador de uma mão na bola da ponta do indicador da outra** (as mesmas bolas da pinça; tocam quando a distância entre as
+pontas, na imagem, é no máximo a soma dos dois raios). Um som curto confirma. A troca acontece **uma vez por toque** (é preciso separar as pontas antes de trocar
+de novo, com pelo menos 0,8 s entre trocas). Como as pontas estão juntas no momento da troca, o cursor não pula. Uma mão em rolagem não recebe o cursor.
+A *Visão da câmera* marca o indicador da mão do cursor com um anel e a palavra **CURSOR**, e mostra "mão que move o cursor: mão N".
+Funciona também com a rolagem desligada.
+
 ## Rolagem com os dedos dobrados (joinha)
 
 Com **indicador, médio, anelar e mindinho dobrados** (o polegar é livre: vale o "joinha"/sinal de legal e também o punho), mover a mão rola a página

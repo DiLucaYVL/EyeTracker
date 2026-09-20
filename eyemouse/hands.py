@@ -57,6 +57,14 @@ def pinch_metrics(hand: HandData, width: int = 640, height: int = 480) -> tuple[
     return _d(p[THUMB_TIP], p[INDEX_TIP]) / scale, _d(p[THUMB_TIP], p[MIDDLE_TIP]) / scale
 
 
+def index_tips_touching(a: HandData, b: HandData, size: tuple[int, int], ball_size: float) -> bool:
+    """Do the index-fingertip balls of two different hands touch? (2D, each ball sized by its own hand)"""
+    scale = np.array(size, dtype=np.float64)
+    pa, pb = a.pts[INDEX_TIP, :2] * scale, b.pts[INDEX_TIP, :2] * scale
+    reach = ball_radius_px(ball_size, hand_scale_px(a, size)) + ball_radius_px(ball_size, hand_scale_px(b, size))
+    return _d(pa, pb) <= reach
+
+
 def derive_ball_size(open_value: float, contact_value: float) -> float | None:
     """Ball radius (fraction of the hand) from a user's measured open-hand distance and fingertip-contact distance.
 

@@ -8,7 +8,7 @@ from .tracker import PREVIEW_SIZE
 
 BG, FG, DIM = "#0b0f14", "#e6edf3", "#8b949e"
 GOOD, WARN, ORANGE, PURPLE, BAD = "#3fb950", "#d29922", "#f0883e", "#a371f7", "#f85149"
-INFO_HEIGHT = 120
+INFO_HEIGHT = 142
 
 
 class CameraView:
@@ -80,3 +80,6 @@ class CameraView:
                            f"{cfg.pinch_thresholds()[0]:.2f})", DIM, 9)
         self._text(80, f"bolas = pontas dos dedos ({cfg.pinch_ball_size * 100:.1f}% da mão): a pinça dispara quando duas se TOCAM (4 dedos dobrados = rolagem)", DIM, 9)
         self._text(100, f"cursor: origem {st.source}   |   roxo = rolagem, verde = clique esq., laranja = clique dir.", DIM, 9)
+        if cfg.hand_mode == "hand":
+            who = f"mão {st.pointer + 1}" if st.pointer is not None else "nenhuma"
+            self._text(122, f"mão que move o cursor: {who}   |   toque o indicador de uma mão no da outra para trocar", "#58d6ff", 9)

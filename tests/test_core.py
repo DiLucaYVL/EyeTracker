@@ -17,7 +17,7 @@ from eyemouse.filters import MedianFilter, OneEuroFilter
 from eyemouse import imaging
 from eyemouse.features import eye_region_box
 from eyemouse.gaze_model import GazeModel, reject_outliers
-from eyemouse.hands import FINGER_TIPS, PinchDetector, derive_ball_size, finger_curls, fingers_folded, pinch_metrics
+from eyemouse.hands import FINGER_TIPS, PinchDetector, derive_ball_size, finger_curls, fingers_folded, index_tips_touching, pinch_metrics
 from eyemouse.landmarks import HandData
 
 SCREEN = (1366, 768)
@@ -331,6 +331,31 @@ class ScrollGestureTest(unittest.TestCase):
             self.assertFalse(fingers_folded(hand_pose(curls)), FINGER_TIPS)
         self.assertFalse(fingers_folded(hand_pose()))                    # open hand
         self.assertFalse(fingers_folded(hand_pose((1.3,) * 4)))         # relaxed, half-folded
+
+
+class IndexTipsTouchingTest(unittest.TestCase):
+    """Index ball of one hand touching the index ball of the other hand (used to hand the cursor over)."""
+
+    def hand_with_index_at(self, x, y):
+        hand = hand_touching(0.9, 0.9)
+        hand.pts[8, :2] = (x, y)
+        return hand
+
+    def test_balls_touch_when_the_tips_are_within_two_radii(self):
+        cfg = Config()
+        reach = 2 * cfg.pinch_ball_size * 0.2                            # two radii, in image units (hand size = 0.2)
+        a = self.hand_with_index_at(0.3, 0.3)
+        self.assertTrue(index_tips_touching(a, self.hand_with_index_at(0.3 + reach * 0.9, 0.3), IMG, cfg.pinch_ball_size))
+        self.assertFalse(index_tips_touching(a, self.hand_with_index_at(0.3 + reach * 1.2, 0.3), IMG, cfg.pinch_ball_size))
+
+    def test_a_bigger_ball_reaches_further(self):
+        a, b = self.hand_with_index_at(0.3, 0.3), self.hand_with_index_at(0.36, 0.3)
+        self.assertFalse(index_tips_touching(a, b, IMG, 0.095))
+        self.assertTrue(index_tips_touching(a, b, IMG, 0.20))
+
+    def test_the_order_of_the_hands_does_not_matter(self):
+        a, b = self.hand_with_index_at(0.3, 0.3), self.hand_with_index_at(0.32, 0.3)
+        self.assertEqual(index_tips_touching(a, b, IMG, 0.095), index_tips_touching(b, a, IMG, 0.095))
 
 
 class DeriveBallSizeTest(unittest.TestCase):
